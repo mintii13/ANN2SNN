@@ -346,6 +346,7 @@ def train_one_epoch(
 
         # forward
         outputs = model(input)
+        loss = 0
         for name, criterion_loss in criterion.items():
             weight = criterion_loss.weight
             loss += weight * criterion_loss(outputs)
