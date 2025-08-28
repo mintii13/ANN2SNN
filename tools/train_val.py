@@ -31,7 +31,6 @@ from utils.misc_helper import (
 )
 from utils.optimizer_helper import get_optimizer
 from utils.vis_helper import visualize_compound, visualize_single
-import torch.nn.functional as F
 
 class_name_list = [
     "bottle",
@@ -347,13 +346,6 @@ def train_one_epoch(
 
         # forward
         outputs = model(input)
-        if rank == 0 and (i % 100 == 0):  # Print mỗi 100 iterations
-            print(f"\n=== TRAINING DEBUG - Step {curr_step} ===")
-            for key, value in outputs.items():
-                if isinstance(value, torch.Tensor):
-                    print(f"Feature '{key}' shape: {value.shape}")
-            print("=" * 45)
-        loss = 0
         for name, criterion_loss in criterion.items():
             weight = criterion_loss.weight
             loss += weight * criterion_loss(outputs)
@@ -439,29 +431,6 @@ def validate(val_loader, model, single_gpu_mode, wandb_run=None, epoch=None):
             # forward
             outputs = model(input)
             dump(config.evaluator.eval_dir, outputs)
-            if rank == 0 and i == 0:  # Chỉ print ở batch đầu tiên
-                print(f"\n=== VALIDATION DEBUG - Batch {i} ===")
-                for key, value in outputs.items():
-                    if isinstance(value, torch.Tensor):
-                        print(f"Feature '{key}' shape: {value.shape}")
-                
-                # Print MSE loss matrix 14x14 cho 3 channel đầu (sample đầu tiên)
-                if 'feature_align' in outputs and 'feature_rec' in outputs:
-                    feature_align = outputs['feature_align']
-                    feature_rec = outputs['feature_rec']
-                    
-                    # Lấy sample đầu tiên, 3 channel đầu tiên
-                    for ch in range(min(3, feature_align.shape[1])):
-                        align_map = feature_align[0, ch]  # shape: [14, 14]
-                        rec_map = feature_rec[0, ch]      # shape: [14, 14]
-                        
-                        # Tính MSE loss tại từng vị trí
-                        mse_matrix = (align_map - rec_map) ** 2  # shape: [14, 14]
-                        
-                        print(f"\nMSE Loss Matrix 14x14 (sample 0, channel {ch}):")
-                        print(mse_matrix.cpu().numpy())
-                        print(f"Mean MSE channel {ch}: {mse_matrix.mean().item():.6f}")
-                print("=" * 45)
             # record loss
             loss = 0
             for name, criterion_loss in criterion.items():
