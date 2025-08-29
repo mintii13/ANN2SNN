@@ -1,8 +1,8 @@
 wandb:
   enabled: true
-  project: UniAD-MVTec-single
+  project: ANN2SNN
   entity: null
-  name: local_500_256_256_0.4mse_0.6spatial_mse_3non_beta2
+  name: local_500_256_256_mse_nonMem
   tags:
     - mvtec
     - anomaly-detection
@@ -16,7 +16,7 @@ wandb:
   run_id: null
   dir: null
   login: true
-  api_key: 0f2ca680372a916c31aab5ede7bbefab410fe503
+  api_key: 997d5b0dec14260a6aa6e91d178a836d82a483d9
 
 version: v1.0.0
 random_seed: 133
@@ -52,17 +52,10 @@ dataset:
   workers: 4
 
 criterion:
-  - name: CombinedMSESpatialFocalLoss
-    type: CombinedMSESpatialFocalLoss
+  - name: FeatureMSELoss
+    type: FeatureMSELoss
     kwargs:
       weight: 1.0
-      mse_weight: 0 # 40% MSE for stability
-      spatial_focal_weight: 1 # 60% Spatial Focal for performance
-      beta: 2 # Moderate focusing strength
-      epsilon: 0.001
-      loss_type: mse
-      region_size: 3 # 3x3 regions
-      overlap: False
 
 trainer:
   max_epoch: 500
@@ -85,7 +78,7 @@ trainer:
       weight_decay: 0.0001
 
 saver:
-  auto_resume: true
+  auto_resume: false
   always_save: false
   load_path: 'D:\FPTU-sourse\Term5\ImageAnomalyDetection\Code\IAD\tools\checkpoints\500_256_256_0.4mse_0.6spatial_mse_3non_beta2.5_ckpt_best.pth.tar'
   save_dir: checkpoints/
@@ -144,8 +137,8 @@ net:
       dropout: 0.1
       activation: relu
       normalize_before: false
-      #memory_mode: channel # Options: 'channel', 'spatial', 'both', 'none'
-      #fusion_mode: concat # Options: 'concat', 'add', 'multiply', 'attention', 'gate'
+      memory_mode: none # Options: 'channel', 'spatial', 'both', 'none'
+      fusion_mode: concat # Options: 'concat', 'add', 'multiply', 'attention', 'gate'
       channel_memory_size: 256
       spatial_memory_size: 256
       feature_jitter:
