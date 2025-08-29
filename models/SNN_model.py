@@ -8,6 +8,24 @@ from einops import rearrange
 from tqdm import tqdm
 
 # ========== Core Components from Paper 2502.21193 ==========
+class MembraneLinear(nn.Module):
+    """Linear layer chỉ tích lũy membrane potential, không phát xung"""
+    def __init__(self, linear: nn.Linear, tau: float = 2.0):
+        super().__init__()
+        self.linear = linear
+        self.tau = tau
+        self.register_buffer('membrane', None)
+        
+    def forward(self, x):
+        current = self.linear(x)
+        if self.membrane is None:
+            self.membrane = torch.zeros_like(current)
+        # Leaky integration - chỉ tích lũy, không fire
+        self.membrane = self.membrane + (current - self.membrane) / self.tau
+        return self.membrane  # Return membrane potential trực tiếp
+        
+    def reset(self):
+        self.membrane = None
 
 class MultiThresholdNeuron(nn.Module):
     """
@@ -522,9 +540,11 @@ class ECMTUniADMemory(nn.Module):
         self.hidden_dim = ann_reconstruction.hidden_dim
         
         # Keep input/output projections as ANN for stability
-        self.input_proj = ann_reconstruction.input_proj
+        self.input_proj = SpikingLinearECMT(ann_reconstruction.input_proj, tau, num_thresholds)
         self.pos_embed = ann_reconstruction.pos_embed
-        self.output_proj = ann_reconstruction.output_proj
+        # self.output_proj = SpikingLinearECMT(ann_reconstruction.output_proj, tau, num_thresholds)
+        self.output_proj = MembraneLinear(ann_reconstruction.output_proj, tau)
+        self.sigmoid = nn.Sigmoid()
         self.upsample = ann_reconstruction.upsample
         
         # Convert encoder to ECMT
@@ -551,6 +571,7 @@ class ECMTUniADMemory(nn.Module):
         
         # Input projection
         feature_tokens = self.input_proj(feature_tokens)
+        feature_tokens = F.layer_norm(feature_tokens, feature_tokens.shape[-1:])
         pos_embed = self.pos_embed(feature_tokens)
         
         # Reset all ECMT modules before inference
@@ -578,7 +599,8 @@ class ECMTUniADMemory(nn.Module):
             decoded_tokens = self.decoder_norm(decoded_tokens)
         
         # Output projection
-        feature_rec_tokens = self.output_proj(decoded_tokens)
+        membrane_potential = self.output_proj(decoded_tokens)
+        feature_rec_tokens = self.sigmoid(membrane_potential)
         feature_rec = rearrange(feature_rec_tokens, "b (h w) c -> b c h w", h=self.feature_size[0])
         
         # Compute prediction
@@ -593,10 +615,12 @@ class ECMTUniADMemory(nn.Module):
     
     def reset_all(self):
         """Reset all ECMT components"""
+        self.input_proj.reset()
         for layer in self.encoder_layers:
             layer.reset()
         for layer in self.decoder_layers:
             layer.reset()
+        self.output_proj.reset()
 
 
 def convert_uniad_to_ecmt(ann_model, tau=2.0, num_thresholds=4, compensation_window=4):

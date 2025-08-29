@@ -3,10 +3,7 @@
 SNN UniAD Inference Script (with built-in validate_snn)
 
 Usage:
-    python tools/snn_inference.py \
-        --config tools/config.yaml \
-        --checkpoint tools/checkpoints/Bottle/ckpt.pth.tar \
-        --class_name bottle --timesteps 4 --validate
+    python tools/snn_inference.py --config tools/config.yaml --checkpoint tools/checkpoints/Bottle/ckpt.pth.tar --class_name bottle --timesteps 4 --validate
 """
 import sys, os
 import yaml
