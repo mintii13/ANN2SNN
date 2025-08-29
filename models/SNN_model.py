@@ -547,7 +547,7 @@ class ECMTUniADMemory(nn.Module):
         Paper shows 4 timesteps achieves 88.6% vs 89.6% with ANN
         """
         feature_align = input["feature_align"]
-        feature_tokens = rearrange(feature_align, "b c h w -> (h w) b c")
+        feature_tokens = rearrange(feature_align, "b c h w -> b (h w) c")
         
         # Input projection
         feature_tokens = self.input_proj(feature_tokens)
@@ -579,7 +579,7 @@ class ECMTUniADMemory(nn.Module):
         
         # Output projection
         feature_rec_tokens = self.output_proj(decoded_tokens)
-        feature_rec = rearrange(feature_rec_tokens, "(h w) b c -> b c h w", h=self.feature_size[0])
+        feature_rec = rearrange(feature_rec_tokens, "b (h w) c -> b c h w", h=self.feature_size[0])
         
         # Compute prediction
         pred = torch.sqrt(torch.sum((feature_rec - feature_align) ** 2, dim=1, keepdim=True))
@@ -641,8 +641,6 @@ def ecmt_temporal_inference(ecmt_model, dataloader, timesteps=4, device='cuda'):
     results = []
     
     print(f"Running ECMT inference with {timesteps} timesteps...")
-    print("Expected performance: 88.6% accuracy (1% loss from ANN baseline)")
-    print("Expected power: 35% of original Transformer")
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="ECMT Inference")):

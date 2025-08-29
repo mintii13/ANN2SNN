@@ -1,0 +1,20 @@
+SNN UniAD Evaluation Report
+==================================================
+
+Timesteps: 4
+Total samples: 83
+Prediction shape: (1, 224, 224)
+
+Prediction Statistics:
+  mean: 104.915474
+  std: 2.179429
+  min: 85.754890
+  max: 185.423248
+
+Class-wise Statistics:
+  bottle: 104.915474 (n=83)
+
+Expected Performance (Paper 2502.21193):
+  - Accuracy: 88.6% (1% loss from ANN baseline)
+  - Power consumption: 35% of original Transformer
+  - Timesteps: 4 (vs 8-16 previous methods)
