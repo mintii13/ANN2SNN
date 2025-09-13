@@ -4,3 +4,5 @@ logs/
 *.pth
 results/
 train_patches/
+*.log
+wandb*
