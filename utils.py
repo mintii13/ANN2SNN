@@ -68,6 +68,7 @@ def generate_image_list(args):
 
 
 def augment_images(filelist, args):
+    print('Augmenting ...')
     for filepath, n in filelist:
         img = read_img(filepath, args.grayscale)
         if img.shape[:2] != (args.im_resize, args.im_resize):
@@ -77,7 +78,7 @@ def augment_images(filelist, args):
         imgname = filename[:dot_pos]
         ext = filename[dot_pos:]
 
-        print('Augmenting {} ...'.format(filename))
+        # print('Augmenting {} ...'.format(filename))
         for i in range(n):
             img_varied = img.copy()
             varied_imgname = '{}_{:0>3d}_'.format(imgname, i)
