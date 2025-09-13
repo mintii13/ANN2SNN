@@ -1,0 +1,6 @@
+.history/
+data/
+logs/
+*.pth
+results/
+train_patches/
