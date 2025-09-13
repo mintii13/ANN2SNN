@@ -11,7 +11,7 @@ from tqdm import tqdm
 from network import AutoEncoder
 from utils import generate_image_list, augment_images, read_img
 from options import Options
-from ssim import SSIM
+from pytorch_ssim import SSIM
 
 cfg = Options().parse()
 
