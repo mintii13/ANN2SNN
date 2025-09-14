@@ -13,11 +13,11 @@ import os
 # Define all MVTec AD classes
 MVTEC_CLASSES = [
     # Objects
-    'bottle', 'cable', 'capsule', 'hazelnut', 'metal_nut', 
-    'pill', 'screw', 
-    # 'toothbrush', 'transistor', 'zipper',
-    # # Textures  
-    # 'carpet', 'grid', 'leather', 'tile', 'wood'
+    # 'bottle', 'cable', 'capsule', 'hazelnut', 'metal_nut', 
+    # 'pill', 'screw', 
+    'toothbrush', 'transistor', 'zipper',
+    # Textures  
+    'carpet', 'grid', 'leather', 'tile', 'wood'
 ]
 
 # Class-specific configurations (from README)
