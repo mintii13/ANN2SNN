@@ -21,21 +21,66 @@ MVTEC_CLASSES = [
 
 # Class-specific configurations (from README)
 CLASS_CONFIGS = {
-    'bottle': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': 'W', 'p_rotate': 0.0},
-    'cable': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': None, 'p_rotate': 0.0, 'p_horizonal_flip': 0.0, 'p_vertical_flip': 0.0},
-    'capsule': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': 'W', 'p_rotate': 0.0, 'p_horizonal_flip': 0.0, 'p_vertical_flip': 0.0},
-    'carpet': {'im_resize': 512, 'patch_size': 128, 'z_dim': 100, 'bg_mask': None, 'rotate_angle_vari': 10},
-    'grid': {'im_resize': 256, 'patch_size': 128, 'z_dim': 100, 'bg_mask': None, 'grayscale': True},
-    'hazelnut': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': 'B', 'p_rotate_crop': 0.0},
-    'leather': {'im_resize': 256, 'patch_size': 128, 'z_dim': 100, 'bg_mask': None},
-    'metal_nut': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': 'B', 'p_rotate_crop': 0.0, 'p_horizonal_flip': 0.0, 'p_vertical_flip': 0.0},
-    'pill': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': 'B', 'p_rotate': 0.0, 'p_horizonal_flip': 0.0, 'p_vertical_flip': 0.0},
-    'screw': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': 'W', 'grayscale': True, 'p_rotate': 0.0},
-    'tile': {'im_resize': 256, 'patch_size': 128, 'z_dim': 100, 'bg_mask': None},
-    'toothbrush': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': None, 'p_rotate': 0.0, 'p_vertical_flip': 0.0},
-    'transistor': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': None, 'p_rotate': 0.0, 'p_vertical_flip': 0.0},
-    'wood': {'im_resize': 256, 'patch_size': 128, 'z_dim': 100, 'bg_mask': None, 'rotate_angle_vari': 15},
-    'zipper': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'bg_mask': None, 'grayscale': True, 'p_rotate': 0.0}
+    'bottle': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'do_aug': True, 'p_rotate': 0.0},
+        'test': {'bg_mask': 'W'}
+    },
+    'cable': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'do_aug': True, 'p_rotate': 0.0, 'p_horizonal_flip': 0.0, 'p_vertical_flip': 0.0},
+        'test': {}
+    },
+    'capsule': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'do_aug': True, 'p_rotate': 0.0, 'p_horizonal_flip': 0.0, 'p_vertical_flip': 0.0},
+        'test': {'bg_mask': 'W'}
+    },
+    'carpet': {
+        'train': {'im_resize': 512, 'patch_size': 128, 'z_dim': 100, 'do_aug': True, 'rotate_angle_vari': 10},
+        'test': {}
+    },
+    'grid': {
+        'train': {'im_resize': 256, 'patch_size': 128, 'z_dim': 100, 'grayscale': True, 'do_aug': True},
+        'test': {'grayscale': True}
+    },
+    'hazelnut': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'do_aug': True, 'p_rotate_crop': 0.0},
+        'test': {'bg_mask': 'B'}
+    },
+    'leather': {
+        'train': {'im_resize': 256, 'patch_size': 128, 'z_dim': 100, 'do_aug': True},
+        'test': {}
+    },
+    'metal_nut': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'do_aug': True, 'p_rotate_crop': 0.0, 'p_horizonal_flip': 0.0, 'p_vertical_flip': 0.0},
+        'test': {'bg_mask': 'B'}
+    },
+    'pill': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'do_aug': True, 'p_rotate': 0.0, 'p_horizonal_flip': 0.0, 'p_vertical_flip': 0.0},
+        'test': {'bg_mask': 'B'}
+    },
+    'screw': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'grayscale': True, 'do_aug': True, 'p_rotate': 0.0},
+        'test': {'grayscale': True, 'bg_mask': 'W'}
+    },
+    'tile': {
+        'train': {'im_resize': 256, 'patch_size': 128, 'z_dim': 100, 'do_aug': True},
+        'test': {}
+    },
+    'toothbrush': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'do_aug': True, 'p_rotate': 0.0, 'p_vertical_flip': 0.0},
+        'test': {}
+    },
+    'transistor': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'do_aug': True, 'p_rotate': 0.0, 'p_vertical_flip': 0.0},
+        'test': {}
+    },
+    'wood': {
+        'train': {'im_resize': 256, 'patch_size': 128, 'z_dim': 100, 'do_aug': True, 'rotate_angle_vari': 15},
+        'test': {}
+    },
+    'zipper': {
+        'train': {'im_resize': 266, 'patch_size': 256, 'z_dim': 500, 'grayscale': True, 'do_aug': True, 'p_rotate': 0.0},
+        'test': {'grayscale': True}
+    }
 }
 
 def parse_args():
@@ -50,13 +95,16 @@ def train_class(class_name, config, epochs):
     print(f"Epochs: {epochs}")
     
     # Build command arguments for train.py
-    cmd = [sys.executable, 'train.py', '--name', class_name, '--epochs', str(epochs)]
-    
-    # Add class-specific configurations
-    for key, value in config.items():
+    cmd = [sys.executable, 'train.py', '--name', class_name, '--epochs', str(epochs), '--loss', 'ssim_loss']
+
+    # Add class-specific train configurations
+    train_config = config.get('train', {})
+    for key, value in train_config.items():
         if key == 'grayscale' and value:
             cmd.append('--grayscale')
-        elif key != 'grayscale':
+        elif key == 'do_aug' and value:
+            cmd.append('--do_aug')
+        elif key not in ['grayscale', 'do_aug'] and value is not None:
             cmd.extend([f'--{key}', str(value)])
     
     print(f"Running command: {' '.join(cmd)}")

@@ -15,6 +15,7 @@ from network import AutoEncoder
 from utils import generate_image_list, augment_images, read_img, get_patch, patch2img, bg_mask, set_img_color
 from options import Options
 from ssim import SSIM
+import subprocess, sys
 
 # WandB import
 try:
@@ -68,213 +69,9 @@ class SSIMPlusL1Loss(nn.Module):
         l1_loss = self.l1(img1, img2)
         return ssim_loss + self.alpha * l1_loss
 
-def get_residual_map(img_path, cfg, model, device):
-    """Calculate residual map for testing"""
-    test_img = read_img(img_path, cfg.grayscale)
-
-    if test_img.shape[:2] != (cfg.im_resize, cfg.im_resize):
-        test_img = cv2.resize(test_img, (cfg.im_resize, cfg.im_resize))
-    if cfg.im_resize != cfg.mask_size:
-        tmp = (cfg.im_resize - cfg.mask_size)//2
-        test_img = test_img[tmp:tmp+cfg.mask_size, tmp:tmp+cfg.mask_size]
-
-    test_img_ = test_img / 255.
-
-    if test_img.shape[:2] == (cfg.patch_size, cfg.patch_size):
-        # Single patch
-        if cfg.grayscale:
-            test_tensor = torch.FloatTensor(test_img_).unsqueeze(0).unsqueeze(0).to(device)
-        else:
-            test_tensor = torch.FloatTensor(test_img_).permute(2, 0, 1).unsqueeze(0).to(device)
-        
-        with torch.no_grad():
-            decoded_tensor = model(test_tensor)
-        
-        if cfg.grayscale:
-            decoded_img = decoded_tensor.squeeze().cpu().numpy()
-        else:
-            decoded_img = decoded_tensor.squeeze().permute(1, 2, 0).cpu().numpy()
-    else:
-        # Multiple patches
-        patches = get_patch(test_img_, cfg.patch_size, cfg.stride)
-        
-        # Convert patches to tensor
-        if cfg.grayscale:
-            patches_tensor = torch.FloatTensor(patches).unsqueeze(1).to(device)
-        else:
-            patches_tensor = torch.FloatTensor(patches).permute(0, 3, 1, 2).to(device)
-        
-        # Process in batches to avoid memory issues
-        batch_size = 32
-        decoded_patches = []
-        with torch.no_grad():
-            for i in range(0, len(patches_tensor), batch_size):
-                batch = patches_tensor[i:i+batch_size]
-                decoded_batch = model(batch)
-                
-                if cfg.grayscale:
-                    decoded_batch = decoded_batch.squeeze(1).cpu().numpy()
-                else:
-                    decoded_batch = decoded_batch.permute(0, 2, 3, 1).cpu().numpy()
-                
-                decoded_patches.append(decoded_batch)
-        
-        decoded_patches = np.concatenate(decoded_patches, axis=0)
-        decoded_img = patch2img(decoded_patches, cfg.im_resize, cfg.patch_size, cfg.stride)
-
-    rec_img = np.reshape((decoded_img * 255.).astype('uint8'), test_img.shape)
-
-    if cfg.grayscale:
-        ssim_residual_map = 1 - ssim(test_img, rec_img, win_size=11, full=True)[1]
-        l1_residual_map = np.abs(test_img / 255. - rec_img / 255.)
-    else:
-        min_dim = min(test_img.shape[:2])
-        win_size = min(11, min_dim if min_dim % 2 == 1 else min_dim - 1)
-        win_size = max(3, win_size)
-        ssim_residual_map = ssim(test_img, rec_img, win_size=win_size, full=True, channel_axis=2)[1]
-        ssim_residual_map = 1 - np.mean(ssim_residual_map, axis=2)
-        l1_residual_map = np.mean(np.abs(test_img / 255. - rec_img / 255.), axis=2)
-
-    return test_img, rec_img, ssim_residual_map, l1_residual_map
-
-def calculate_image_auc(cfg, model, device):
-    """Calculate Image-level AUC for testing"""
-    print('Calculating Image-level AUC...')
-    
-    all_scores = []
-    all_labels = []
-    
-    # Process good samples (label = 0)
-    good_files = glob(os.path.join(cfg.test_dir, 'good', '*'))
-    if not good_files:
-        print("Warning: No good samples found for AUC calculation")
-        return None
-    
-    for img_path in good_files:
-        try:
-            _, _, ssim_res, l1_res = get_residual_map(img_path, cfg, model, device)
-            # Image-level anomaly score: max of residual maps
-            score = np.max(ssim_res + l1_res)
-            all_scores.append(score)
-            all_labels.append(0)  # Normal
-        except Exception as e:
-            print(f"Error processing {img_path}: {e}")
-    
-    # Process defective samples (label = 1)
-    defect_folders = [folder for folder in os.listdir(cfg.test_dir) 
-                     if folder != 'good' and os.path.isdir(os.path.join(cfg.test_dir, folder))]
-    
-    for folder in defect_folders:
-        defect_files = glob(os.path.join(cfg.test_dir, folder, '*'))
-        for img_path in defect_files:
-            try:
-                _, _, ssim_res, l1_res = get_residual_map(img_path, cfg, model, device)
-                score = np.max(ssim_res + l1_res)
-                all_scores.append(score)
-                all_labels.append(1)  # Defective
-            except Exception as e:
-                print(f"Error processing {img_path}: {e}")
-    
-    if len(set(all_labels)) < 2:
-        print("Warning: Need both normal and defective samples for AUC calculation")
-        return None
-    
-    # Calculate AUC
-    image_auc = roc_auc_score(all_labels, all_scores)
-    print(f'Image-level AUC: {image_auc:.4f}')
-    
-    return image_auc
-
-def calculate_pixel_auc(cfg, model, device):
-    """Calculate Pixel-level AUC using ground truth masks"""
-    print('Calculating Pixel-level AUC...')
-    
-    # Check if ground truth folder exists
-    gt_dir = cfg.test_dir.replace('test', 'ground_truth')
-    if not os.path.exists(gt_dir):
-        print(f"Warning: Ground truth directory not found: {gt_dir}")
-        print("Pixel-level AUC requires ground truth masks")
-        return None
-    
-    all_pixel_scores = []
-    all_pixel_labels = []
-    
-    # Process defective samples only (good samples don't have GT masks)
-    defect_folders = [folder for folder in os.listdir(cfg.test_dir) 
-                     if folder != 'good' and os.path.isdir(os.path.join(cfg.test_dir, folder))]
-    
-    processed_count = 0
-    for folder in defect_folders:
-        test_files = glob(os.path.join(cfg.test_dir, folder, '*'))
-        gt_folder_path = os.path.join(gt_dir, folder)
-        
-        if not os.path.exists(gt_folder_path):
-            continue
-            
-        for test_path in test_files:
-            # Find corresponding ground truth mask
-            filename = os.path.splitext(os.path.basename(test_path))[0]
-            possible_gt_extensions = ['.png', '.bmp', '.jpg', '.jpeg']
-            gt_path = None
-            
-            for ext in possible_gt_extensions:
-                potential_gt_path = os.path.join(gt_folder_path, filename + '_mask' + ext)
-                if os.path.exists(potential_gt_path):
-                    gt_path = potential_gt_path
-                    break
-                # Try without '_mask' suffix
-                potential_gt_path = os.path.join(gt_folder_path, filename + ext)
-                if os.path.exists(potential_gt_path):
-                    gt_path = potential_gt_path
-                    break
-            
-            if gt_path is None:
-                continue
-                
-            try:
-                # Get residual maps
-                _, _, ssim_res, l1_res = get_residual_map(test_path, cfg, model, device)
-                combined_score = ssim_res + l1_res
-                
-                # Load and process ground truth
-                gt_mask = cv2.imread(gt_path, 0)
-                if gt_mask is None:
-                    continue
-                    
-                # Resize GT mask to match residual map size
-                if gt_mask.shape != combined_score.shape:
-                    gt_mask = cv2.resize(gt_mask, (combined_score.shape[1], combined_score.shape[0]))
-                
-                # Binarize ground truth (threshold at 127)
-                gt_binary = (gt_mask > 127).astype(int)
-                
-                # Flatten and add to arrays
-                all_pixel_scores.extend(combined_score.flatten())
-                all_pixel_labels.extend(gt_binary.flatten())
-                processed_count += 1
-                
-            except Exception as e:
-                print(f"Error processing {test_path}: {e}")
-    
-    if processed_count == 0:
-        print("Warning: No valid image-mask pairs found for pixel-level AUC")
-        return None
-    
-    if len(set(all_pixel_labels)) < 2:
-        print("Warning: Need both normal and defective pixels for AUC calculation")
-        return None
-    
-    # Calculate pixel-level AUC
-    pixel_auc = roc_auc_score(all_pixel_labels, all_pixel_scores)
-    print(f'Pixel-level AUC: {pixel_auc:.4f} (processed {processed_count} images)')
-    
-    return pixel_auc
-
-def test_model(cfg, model, device, valid_loader, criterion, epoch):
-    """Test model: calculate validation loss, image AUC, and pixel AUC"""
+def calculate_val_loss(cfg, model, device, valid_loader, criterion, epoch):
+    """Only calculate validation loss"""
     model.eval()
-    
-    # 1. Calculate validation loss
     val_loss = 0.0
     val_pbar = tqdm(valid_loader, desc=f'Epoch {epoch}/{cfg.epochs} [Val]', disable=DISABLE_PROGRESS)
     with torch.no_grad():
@@ -286,17 +83,75 @@ def test_model(cfg, model, device, valid_loader, criterion, epoch):
             val_pbar.set_postfix({'loss': f'{loss.item():.6f}'})
     
     avg_val_loss = val_loss / len(valid_loader)
+    return avg_val_loss
     
-    # 2. Calculate Image-level AUC if test directory exists
-    test_image_auc = None
-    test_pixel_auc = None
-    if cfg.test_dir and os.path.exists(cfg.test_dir):
-        test_image_auc = calculate_image_auc(cfg, model, device)
+def call_test_script(cfg, epoch):
+    """Call test.py as subprocess and parse results"""
+    # Import CLASS_CONFIGS from train_all.py
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("train_all", "train_all.py")
+    train_all = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(train_all)
+
+    # Build test command với đúng config
+    test_cmd = [
+        sys.executable, 'test.py',
+        '--name', cfg.name,
+        '--loss', cfg.loss,
+        '--im_resize', str(cfg.im_resize),
+        '--patch_size', str(cfg.patch_size),
+        '--z_dim', str(cfg.z_dim),
+        '--weight_file', f'current_epoch_{epoch}.pth'
+    ]
+
+    # Add grayscale nếu có trong cfg hiện tại
+    if cfg.grayscale:
+        test_cmd.append('--grayscale')
+
+    # Import và add class-specific test configs (chỉ các tham số đặc biệt)
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("train_all", "train_all.py")
+        train_all = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(train_all)
         
-        # 3. Calculate Pixel-level AUC if ground truth exists
-        test_pixel_auc = calculate_pixel_auc(cfg, model, device)
+        if cfg.name in train_all.CLASS_CONFIGS:
+            test_config = train_all.CLASS_CONFIGS[cfg.name].get('test', {})
+            for key, value in test_config.items():
+                if key == 'bg_mask' and value:
+                    test_cmd.extend(['--bg_mask', value])
+                # Không cần check grayscale ở đây vì đã add ở trên
+    except:
+        # Fallback nếu không import được train_all.py
+        pass
     
-    return avg_val_loss, test_image_auc, test_pixel_auc
+    try:
+        result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=600)
+        
+        # Parse output để extract AUC scores
+        image_auc = None
+        pixel_auc = None
+        
+        for line in result.stdout.split('\n'):
+            if 'Image-level AUC:' in line:
+                try:
+                    image_auc = float(line.split(':')[1].strip())
+                except:
+                    pass
+            elif 'Pixel-level AUC:' in line:
+                try:
+                    pixel_auc = float(line.split(':')[1].strip())
+                except:
+                    pass
+        
+        return image_auc, pixel_auc, True
+        
+    except subprocess.TimeoutExpired:
+        print(f"Test subprocess timed out at epoch {epoch}")
+        return None, None, False
+    except Exception as e:
+        print(f"Test subprocess failed at epoch {epoch}: {e}")
+        return None, None, False
 
 def init_wandb(cfg):
     """Initialize WandB"""
@@ -408,20 +263,25 @@ for epoch in range(cfg.epochs):
     test_image_auc = None
     test_pixel_auc = None
     
-    if (epoch + 1) % 10 == 0:
+    if (epoch + 1) % 10 == 1:
         print(f'\nTesting at epoch {epoch + 1}...')
-        avg_val_loss, test_image_auc, test_pixel_auc = test_model(cfg, model, device, valid_loader, criterion, epoch)
+        avg_val_loss = calculate_val_loss(cfg, model, device, valid_loader, criterion, epoch + 1)
+        
+        # Call test.py subprocess
+        test_image_auc, test_pixel_auc, test_success = call_test_script(cfg, epoch + 1)
         
         # Add validation and test metrics
         metrics["val/loss"] = avg_val_loss
-        
-        if test_image_auc is not None:
+        print('test_success:', test_success)
+        print('test_image_auc:', test_image_auc)
+        print('test_pixel_auc:', test_pixel_auc)
+        if test_success and test_image_auc is not None:
             metrics["test/image_auc"] = test_image_auc
             if test_image_auc > best_image_auc:
                 best_image_auc = test_image_auc
                 metrics["test/best_image_auc"] = best_image_auc
         
-        if test_pixel_auc is not None:
+        if test_success and test_pixel_auc is not None:
             metrics["test/pixel_auc"] = test_pixel_auc
             if test_pixel_auc > best_pixel_auc:
                 best_pixel_auc = test_pixel_auc
@@ -485,17 +345,18 @@ for epoch in range(cfg.epochs):
         print(f', Pixel AUC: {test_pixel_auc:.4f}', end='')
     print()
 
-# Final test
-print("\nPerforming final test...")
-final_val_loss, final_image_auc, final_pixel_auc = test_model(cfg, model, device, valid_loader, criterion, cfg.epochs)
+# # Final test
+# print("\nPerforming final test...")
+# final_image_auc, final_pixel_auc, test_success = call_test_script(cfg, epoch + 1)
+# final_val_loss = calculate_val_loss(cfg, model, device, valid_loader, criterion, epoch + 1)
 
-if wandb_run:
-    if final_val_loss is not None:
-        wandb_run.log({"final_test/val_loss": final_val_loss})
-    if final_image_auc is not None:
-        wandb_run.log({"final_test/image_auc": final_image_auc})
-    if final_pixel_auc is not None:
-        wandb_run.log({"final_test/pixel_auc": final_pixel_auc})
+# if wandb_run:
+#     if final_val_loss is not None:
+#         wandb_run.log({"final_test/val_loss": final_val_loss})
+#     if final_image_auc is not None:
+#         wandb_run.log({"final_test/image_auc": final_image_auc})
+#     if final_pixel_auc is not None:
+#         wandb_run.log({"final_test/pixel_auc": final_pixel_auc})
 
 # Enhanced training summary
 print("\n" + "="*60)
@@ -522,10 +383,10 @@ if wandb_run:
     wandb_run.summary["final_epoch"] = epoch + 1
     wandb_run.summary["early_stopped"] = patience_counter >= PATIENCE_LIMIT
     
-    if final_image_auc is not None:
-        wandb_run.summary["final_image_auc"] = final_image_auc
-    if final_pixel_auc is not None:
-        wandb_run.summary["final_pixel_auc"] = final_pixel_auc
+    # if final_image_auc is not None:
+    #     wandb_run.summary["final_image_auc"] = final_image_auc
+    # if final_pixel_auc is not None:
+    #     wandb_run.summary["final_pixel_auc"] = final_pixel_auc
     
     print(f"WandB run: {wandb_run.url}")
     wandb_run.finish()
