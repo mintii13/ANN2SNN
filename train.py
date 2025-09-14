@@ -259,18 +259,16 @@ for epoch in range(cfg.epochs):
         "epoch": (epoch + 1)
     }
     
-    # Test every 10 epochs (validation + AUCs)
+    # Val every epoch
     avg_val_loss = None
     test_image_auc = None
     test_pixel_auc = None
-    
-    if True:
-        print(f'\nTesting at epoch {epoch + 1}...')
-        avg_val_loss = calculate_val_loss(cfg, model, device, valid_loader, criterion, epoch + 1)
-
-        # Save current model mỗi epoch
-        current_model_path = os.path.join(cfg.chechpoint_dir, 'model.pth')
-        checkpoint = {
+    print(f'\nValidate at epoch {epoch + 1}...')
+    avg_val_loss = calculate_val_loss(cfg, model, device, valid_loader, criterion, epoch + 1)
+    metrics["val/loss"] = avg_val_loss
+    # Save current model mỗi epoch
+    current_model_path = os.path.join(cfg.chechpoint_dir, 'model.pth')
+    checkpoint = {
             'epoch': epoch + 1,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
@@ -280,14 +278,16 @@ for epoch in range(cfg.epochs):
             'test_pixel_auc': test_pixel_auc if test_pixel_auc is not None else 0.0,
             'config': cfg.__dict__
         }
-        torch.save(checkpoint, current_model_path)
-        print(f'Current model saved: {current_model_path}')
+    torch.save(checkpoint, current_model_path)
+    print(f'Current model saved: {current_model_path}')
+
+    # Test every 10 epochs
+    if (epoch + 1) % 10 == 0:
         # Call test.py subprocess
         test_image_auc, test_pixel_auc, test_success = call_test_script(cfg, epoch + 1)
-        
         # Add validation and test metrics
-        metrics["val/loss"] = avg_val_loss
-        print('test_success:', test_success)
+        
+        print(f'\nTest at epoch {epoch + 1}...')
         print('test_image_auc:', test_image_auc)
         print('test_pixel_auc:', test_pixel_auc)
         if test_success and test_image_auc is not None:
@@ -302,46 +302,35 @@ for epoch in range(cfg.epochs):
                 best_pixel_auc = test_pixel_auc
                 metrics["test/best_pixel_auc"] = best_pixel_auc
         
-        # Early stopping and model saving based on validation loss
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            patience_counter = 0
-            
-            # Save checkpoint
-            checkpoint = {
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'train_loss': avg_train_loss,
-                'val_loss': avg_val_loss,
-                'test_image_auc': test_image_auc if test_image_auc is not None else 0.0,
-                'test_pixel_auc': test_pixel_auc if test_pixel_auc is not None else 0.0,
-                'best_val_loss': best_val_loss,
-                'best_image_auc': best_image_auc,
-                'best_pixel_auc': best_pixel_auc,
-                'config': cfg.__dict__
-            }
-            # Save best model
-            best_model_path = os.path.join(cfg.chechpoint_dir, 'best_model.pth')
-            torch.save(checkpoint, best_model_path)  # Dùng lại checkpoint từ trên
-            
-            print(f'New best model saved: {best_model_path}')
-            
-            
-            # # Log model artifact to WandB
-            # if wandb_run:
-            #     artifact = wandb.Artifact(
-            #         name=f"model-epoch-{epoch+1}",
-            #         type="model",
-            #         description=f"Best model at epoch {epoch+1} with val_loss {avg_val_loss:.5f}"
-            #     )
-            #     artifact.add_file(best_model_path)
-            #     wandb_run.log_artifact(artifact)
-        else:
-            patience_counter += 1
-            if patience_counter >= PATIENCE_LIMIT:
-                print(f'Early stopping at epoch {epoch+1} (after {patience_counter} tests without improvement)')
-                break
+    # Early stopping and model saving based on validation loss
+    if avg_val_loss < best_val_loss:
+        best_val_loss = avg_val_loss
+        patience_counter = 0
+        
+        # Save checkpoint
+        checkpoint = {
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'train_loss': avg_train_loss,
+            'val_loss': avg_val_loss,
+            'test_image_auc': test_image_auc if test_image_auc is not None else 0.0,
+            'test_pixel_auc': test_pixel_auc if test_pixel_auc is not None else 0.0,
+            'best_val_loss': best_val_loss,
+            'best_image_auc': best_image_auc,
+            'best_pixel_auc': best_pixel_auc,
+            'config': cfg.__dict__
+        }
+        # Save best model
+        best_model_path = os.path.join(cfg.chechpoint_dir, 'best_model.pth')
+        torch.save(checkpoint, best_model_path)  # Dùng lại checkpoint từ trên
+        
+        print(f'New best model saved: {best_model_path}')
+    else:
+        patience_counter += 1
+        if patience_counter >= PATIENCE_LIMIT:
+            print(f'Early stopping at epoch {epoch+1} (after {patience_counter} tests without improvement)')
+            break
     
     # Log to WandB
     if wandb_run:
