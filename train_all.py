@@ -13,8 +13,8 @@ import os
 # Define all MVTec AD classes
 MVTEC_CLASSES = [
     # Objects
-    # 'bottle', 'cable', 'capsule', 'hazelnut', 'metal_nut', 
-    # 'pill', 'screw', 
+    'bottle', 'cable', 'capsule', 'hazelnut', 'metal_nut', 
+    'pill', 'screw', 
     'toothbrush', 'transistor', 'zipper',
     # Textures  
     'carpet', 'grid', 'leather', 'tile', 'wood'
@@ -96,7 +96,7 @@ def train_class(class_name, config, epochs):
     print(f"Epochs: {epochs}")
     
     # Build command arguments for train.py
-    cmd = [sys.executable, 'train.py', '--name', class_name, '--epochs', str(epochs), '--loss', 'ssim_l1_loss']
+    cmd = [sys.executable, 'train.py', '--name', class_name, '--epochs', str(epochs), '--loss', 'ssim_loss']
 
     # Add class-specific train configurations
     train_config = config.get('train', {})

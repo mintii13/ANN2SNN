@@ -29,7 +29,7 @@ class Options():
 
         self.parser.add_argument('--epochs', type=int, default=200, help='maximum training epochs')
         self.parser.add_argument('--batch_size', type=int, default=128)
-        self.parser.add_argument('--loss', type=str, default='ssim_l1_loss', help='loss type in [ssim_loss, ssim_l1_loss, l2_loss]')
+        self.parser.add_argument('--loss', type=str, default='ssim_loss', help='loss type in [ssim_loss, ssim_l1_loss, l2_loss]')
         self.parser.add_argument('--weight', type=int, default=1, help='weight of the l1_loss item if using ssim_l1_loss')
         self.parser.add_argument('--lr', type=float, default=2e-4, help='learning rate of Adam')
         self.parser.add_argument('--decay', type=float, default=1e-5, help='decay of Adam')	

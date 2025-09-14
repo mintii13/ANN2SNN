@@ -16,7 +16,8 @@ from utils import generate_image_list, augment_images, read_img, get_patch, patc
 from options import Options
 from ssim import SSIM
 import subprocess, sys
-
+import setproctitle
+setproctitle.setproctitle("Minh Tri Nguyen is training...") 
 # WandB import
 try:
     import wandb
