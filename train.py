@@ -100,8 +100,7 @@ def call_test_script(cfg, epoch):
         '--loss', cfg.loss,
         '--im_resize', str(cfg.im_resize),
         '--patch_size', str(cfg.patch_size),
-        '--z_dim', str(cfg.z_dim),
-        '--weight_file', f'current_epoch_{epoch}.pth'
+        '--z_dim', str(cfg.z_dim)
     ]
 
     # Add grayscale nếu có trong cfg hiện tại
@@ -140,7 +139,9 @@ def call_test_script(cfg, epoch):
                     pass
             elif 'Pixel-level AUC:' in line:
                 try:
-                    pixel_auc = float(line.split(':')[1].strip())
+                    # Extract chỉ số AUC, loại bỏ phần text sau
+                    auc_text = line.split(':')[1].strip()
+                    pixel_auc = float(auc_text.split()[0])  # Lấy số đầu tiên trước space
                 except:
                     pass
         
@@ -224,12 +225,12 @@ best_val_loss = float('inf')
 best_image_auc = 0.0
 best_pixel_auc = 0.0
 patience_counter = 0
-PATIENCE_LIMIT = 5  # Changed from 20 to 5
+PATIENCE_LIMIT = 20
 
 print(f"Training on device: {device}")
 print(f"Dataset: {cfg.name}, Loss: {cfg.loss}")
 print(f"Train samples: {len(train_dataset)}, Validation samples: {len(valid_dataset)}")
-print(f"Testing every 10 epochs. Early stopping patience: {PATIENCE_LIMIT} tests")
+print(f"Validate every epoch. Early stopping patience: {PATIENCE_LIMIT} epochs")
 
 DISABLE_PROGRESS = os.environ.get('DISABLE_TQDM', '0') == '1'
 for epoch in range(cfg.epochs):
@@ -263,10 +264,24 @@ for epoch in range(cfg.epochs):
     test_image_auc = None
     test_pixel_auc = None
     
-    if (epoch + 1) % 10 == 1:
+    if True:
         print(f'\nTesting at epoch {epoch + 1}...')
         avg_val_loss = calculate_val_loss(cfg, model, device, valid_loader, criterion, epoch + 1)
-        
+
+        # Save current model mỗi epoch
+        current_model_path = os.path.join(cfg.chechpoint_dir, 'model.pth')
+        checkpoint = {
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'train_loss': avg_train_loss,
+            'val_loss': avg_val_loss,
+            'test_image_auc': test_image_auc if test_image_auc is not None else 0.0,
+            'test_pixel_auc': test_pixel_auc if test_pixel_auc is not None else 0.0,
+            'config': cfg.__dict__
+        }
+        torch.save(checkpoint, current_model_path)
+        print(f'Current model saved: {current_model_path}')
         # Call test.py subprocess
         test_image_auc, test_pixel_auc, test_success = call_test_script(cfg, epoch + 1)
         
@@ -306,25 +321,22 @@ for epoch in range(cfg.epochs):
                 'best_pixel_auc': best_pixel_auc,
                 'config': cfg.__dict__
             }
-            
             # Save best model
-            best_model_path = os.path.join(cfg.chechpoint_dir, f'{epoch+1:02d}-{avg_val_loss:.5f}.pth')
-            torch.save(checkpoint, best_model_path)
-            
-            best_generic_path = os.path.join(cfg.chechpoint_dir, 'best_model.pth')
-            torch.save(checkpoint, best_generic_path)
+            best_model_path = os.path.join(cfg.chechpoint_dir, 'best_model.pth')
+            torch.save(checkpoint, best_model_path)  # Dùng lại checkpoint từ trên
             
             print(f'New best model saved: {best_model_path}')
             
-            # Log model artifact to WandB
-            if wandb_run:
-                artifact = wandb.Artifact(
-                    name=f"model-epoch-{epoch+1}",
-                    type="model",
-                    description=f"Best model at epoch {epoch+1} with val_loss {avg_val_loss:.5f}"
-                )
-                artifact.add_file(best_model_path)
-                wandb_run.log_artifact(artifact)
+            
+            # # Log model artifact to WandB
+            # if wandb_run:
+            #     artifact = wandb.Artifact(
+            #         name=f"model-epoch-{epoch+1}",
+            #         type="model",
+            #         description=f"Best model at epoch {epoch+1} with val_loss {avg_val_loss:.5f}"
+            #     )
+            #     artifact.add_file(best_model_path)
+            #     wandb_run.log_artifact(artifact)
         else:
             patience_counter += 1
             if patience_counter >= PATIENCE_LIMIT:
@@ -344,19 +356,6 @@ for epoch in range(cfg.epochs):
     if test_pixel_auc is not None:
         print(f', Pixel AUC: {test_pixel_auc:.4f}', end='')
     print()
-
-# # Final test
-# print("\nPerforming final test...")
-# final_image_auc, final_pixel_auc, test_success = call_test_script(cfg, epoch + 1)
-# final_val_loss = calculate_val_loss(cfg, model, device, valid_loader, criterion, epoch + 1)
-
-# if wandb_run:
-#     if final_val_loss is not None:
-#         wandb_run.log({"final_test/val_loss": final_val_loss})
-#     if final_image_auc is not None:
-#         wandb_run.log({"final_test/image_auc": final_image_auc})
-#     if final_pixel_auc is not None:
-#         wandb_run.log({"final_test/pixel_auc": final_pixel_auc})
 
 # Enhanced training summary
 print("\n" + "="*60)

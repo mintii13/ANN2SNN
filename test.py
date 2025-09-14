@@ -20,31 +20,15 @@ def load_model_for_testing(cfg):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = AutoEncoder(cfg).to(device)
     
-    if cfg.weight_file:
-        checkpoint_path = os.path.join(cfg.chechpoint_dir, cfg.weight_file)
-    else:
-        # Find latest checkpoint
-        file_list = os.listdir(cfg.chechpoint_dir)
-        pth_files = [f for f in file_list if f.endswith('.pth')]
-        if not pth_files:
-            raise ValueError("No checkpoint files found")
-        
-        # Extract epochs from filenames (format: XX-loss.pth)
-        latest_epoch = max([int(f.split('-')[0]) for f in pth_files])
-        print('Loading latest weight file: ', latest_epoch)
-        
-        checkpoint_path = None
-        for f in pth_files:
-            if f.startswith(f"{latest_epoch:02d}-"):
-                checkpoint_path = os.path.join(cfg.chechpoint_dir, f)
-                break
+    # Always load model.pth
+    checkpoint_path = os.path.join(cfg.chechpoint_dir, 'model.pth')
     
-    if checkpoint_path and os.path.exists(checkpoint_path):
+    if os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
         print(f"Loaded checkpoint: {checkpoint_path}")
     else:
-        raise ValueError(f"Checkpoint not found: {checkpoint_path}")
+        raise ValueError(f"Model file not found: {checkpoint_path}")
     
     model.eval()
     return model, device
