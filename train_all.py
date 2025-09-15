@@ -15,9 +15,9 @@ MVTEC_CLASSES = [
     # Objects
     'bottle', 'cable', 'capsule', 'hazelnut', 'metal_nut', 
     'pill', 'screw', 
-    'toothbrush', 'transistor', 'zipper',
-    # Textures  
-    'carpet', 'grid', 'leather', 'tile', 'wood'
+    # 'toothbrush', 'transistor', 'zipper',
+    # # Textures  
+    # 'carpet', 'grid', 'leather', 'tile', 'wood'
 ]
 
 # Class-specific configurations (from README)

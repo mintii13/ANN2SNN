@@ -12,32 +12,32 @@ class AutoEncoder(nn.Module):
         # First two conv layers
         encoder_layers.extend([
             nn.Conv2d(cfg.input_channel, cfg.flc, 4, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc, cfg.flc, 4, stride=2, padding=1), 
-            nn.LeakyReLU(0.2, inplace=True)
+            nn.ReLU(inplace=True)
         ])
         
         # Additional layer for patch_size=256
         if cfg.patch_size == 256:
             encoder_layers.extend([
                 nn.Conv2d(cfg.flc, cfg.flc, 4, stride=2, padding=1),
-                nn.LeakyReLU(0.2, inplace=True)
+                nn.ReLU(inplace=True)
             ])
         
         # Continue encoder
         encoder_layers.extend([
             nn.Conv2d(cfg.flc, cfg.flc, 3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc, cfg.flc*2, 4, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc*2, cfg.flc*2, 3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc*2, cfg.flc*4, 4, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc*4, cfg.flc*2, 3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc*2, cfg.flc, 3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc, cfg.z_dim, 8, stride=1, padding=0)
         ])
         
@@ -48,28 +48,28 @@ class AutoEncoder(nn.Module):
         
         decoder_layers.extend([
             nn.ConvTranspose2d(cfg.z_dim, cfg.flc, 8, stride=1, padding=0),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc, cfg.flc*2, 3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc*2, cfg.flc*4, 3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.ConvTranspose2d(cfg.flc*4, cfg.flc*2, 4, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc*2, cfg.flc*2, 3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.ConvTranspose2d(cfg.flc*2, cfg.flc, 4, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(cfg.flc, cfg.flc, 3, stride=1, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.ReLU(inplace=True),
             nn.ConvTranspose2d(cfg.flc, cfg.flc, 4, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True)
+            nn.ReLU(inplace=True)
         ])
         
         # Additional layer for patch_size=256
         if cfg.patch_size == 256:
             decoder_layers.extend([
                 nn.ConvTranspose2d(cfg.flc, cfg.flc, 4, stride=2, padding=1),
-                nn.LeakyReLU(0.2, inplace=True)
+                nn.ReLU(inplace=True)
             ])
         
         # Final output layer
