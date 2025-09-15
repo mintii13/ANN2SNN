@@ -178,7 +178,7 @@ def init_wandb(cfg):
     try:
         run = wandb.init(
             project="ANN2SNN",
-            name=f"{cfg.name}_{cfg.loss}_{cfg.patch_size}px_server",
+            name=f"{cfg.name}_{cfg.loss}_{cfg.patch_size}px_sv_ReLU",
             config=config,
             tags=[cfg.name, cfg.loss, "autoencoder"],
             notes=f"Autoencoder training on {cfg.name} dataset with {cfg.loss} loss"
