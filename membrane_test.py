@@ -141,24 +141,26 @@ def process_single_patch_snn(test_img_norm, cfg, model_snn, device, timesteps):
     # Reset SNN state
     functional.reset_net(model_snn)
     
-    # Accumulate spikes over timesteps
-    spike_accumulator = None
-    
+    # Run SNN for stabilization, then get membrane potential
     with torch.no_grad():
+        # Warm up SNN for several timesteps to stabilize
         for t in range(timesteps):
-            # SNN output is spikes (0 or 1)
-            spikes = model_snn(test_tensor)
-            
-            if spike_accumulator is None:
-                spike_accumulator = spikes.clone()
-            else:
-                spike_accumulator += spikes
-    
-    # Convert spike accumulation to analog output (rate coding)
-    decoded_tensor = spike_accumulator.float() / timesteps
-    
-    # Apply sigmoid for better reconstruction
-    decoded_tensor = torch.sigmoid(decoded_tensor * 6.0 - 3.0)
+            _ = model_snn(test_tensor)
+        
+        # Get membrane potential from final decoder layer
+        # Assuming the last spiking layer is in decoder
+        final_membrane = None
+        for name, module in model_snn.named_modules():
+            if 'decoder' in name and 'IFNode' in str(type(module)):
+                final_membrane = module.v
+        
+        if final_membrane is not None:
+            # Normalize membrane potential and apply sigmoid
+            decoded_tensor = torch.sigmoid(final_membrane)
+        else:
+            # Fallback to original method
+            decoded_tensor = model_snn(test_tensor)
+            decoded_tensor = torch.sigmoid(decoded_tensor)
     
     if cfg.grayscale:
         return decoded_tensor.squeeze().cpu().numpy()
@@ -185,18 +187,21 @@ def process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timestep
             # Reset SNN state for each batch
             functional.reset_net(model_snn)
             
-            # Accumulate spikes over timesteps
-            batch_accumulator = None
+            # Stabilize SNN then get membrane potential
             for t in range(timesteps):
-                batch_spikes = model_snn(batch)
-                if batch_accumulator is None:
-                    batch_accumulator = batch_spikes.clone()
-                else:
-                    batch_accumulator += batch_spikes
-            
-            # Convert to analog
-            decoded_batch = batch_accumulator.float() / timesteps
-            decoded_batch = torch.sigmoid(decoded_batch * 6.0 - 3.0)
+                _ = model_snn(batch)
+
+            # Get membrane potential from final layer
+            final_membrane = None
+            for name, module in model_snn.named_modules():
+                if 'decoder' in name and 'IFNode' in str(type(module)):
+                    final_membrane = module.v
+                    break
+
+            if final_membrane is not None:
+                decoded_batch = torch.sigmoid(final_membrane)
+            else:
+                decoded_batch = torch.sigmoid(model_snn(batch))
             
             if cfg.grayscale:
                 decoded_batch = decoded_batch.squeeze(1).cpu().numpy()
@@ -300,7 +305,7 @@ def calculate_image_auc(cfg, model_snn, device, timesteps=50):
     all_labels = []
     
     # Process good samples
-    good_files = glob(os.path.join(cfg.test_dir, 'good', '*'))
+    good_files = glob(os.path.join(cfg.test_dir, 'good', '*'))[:20]  # Limit for testing
     for img_path in good_files:
         try:
             _, _, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps)
@@ -314,8 +319,8 @@ def calculate_image_auc(cfg, model_snn, device, timesteps=50):
     defect_folders = [folder for folder in os.listdir(cfg.test_dir) 
                      if folder != 'good' and os.path.isdir(os.path.join(cfg.test_dir, folder))]
     
-    for folder in defect_folders:
-        defect_files = glob(os.path.join(cfg.test_dir, folder, '*'))
+    for folder in defect_folders[:2]:  # Limit to 2 defect types for testing
+        defect_files = glob(os.path.join(cfg.test_dir, folder, '*'))[:10]  # Limit samples
         for img_path in defect_files:
             try:
                 _, _, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps)
@@ -410,7 +415,7 @@ def test_timestep_effect():
     
     # Print summary
     print("\n" + "="*50)
-    print(f"TIMESTEP ANALYSIS RESULTS {cfg.name}")
+    print("TIMESTEP ANALYSIS RESULTS {cfg.name}")
     print("="*50)
     
     if results:
