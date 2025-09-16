@@ -27,10 +27,25 @@ class MembraneOutputLayer(nn.Module):
         
     def forward(self, x):
         x = self.conv(x)
+        # Debug input to neuron
+        print(f"DEBUG: Conv input to neuron range: [{x.min():.4f}, {x.max():.4f}]")
+        
+        # Check if neuron state changes between calls
+        v_before = self.neuron.v.clone() if hasattr(self.neuron, 'v') and self.neuron.v is not None else torch.zeros_like(x)
+        print(f"DEBUG: Membrane before update: [{v_before.min():.4f}, {v_before.max():.4f}]")
+        
         # Run LIF dynamics but return membrane potential
-        self.neuron(x)  # Update membrane potential
-        v_output = self.neuron.v  # ADD THIS
-        print(f"DEBUG: Membrane potential range: [{v_output.min():.4f}, {v_output.max():.4f}]")  # ADD THIS
+        spike_output = self.neuron(x)  # This should update v and return spikes
+        print(f"DEBUG: Spike output range: [{spike_output.min():.4f}, {spike_output.max():.4f}]")
+        print(f"DEBUG: Spike count: {spike_output.sum().item()}")
+        
+        v_output = self.neuron.v
+        print(f"DEBUG: Membrane after update: [{v_output.min():.4f}, {v_output.max():.4f}]")
+        
+        # Check if membrane potential actually changed
+        v_diff = torch.abs(v_output - v_before).max()
+        print(f"DEBUG: Membrane change: {v_diff:.6f}")
+        
         return v_output
 
 
@@ -112,7 +127,7 @@ def convert_ann_to_snn(cfg, model_ann, device):
     converter = ann2snn.Converter(
         dataloader=calib_dataloader, 
         device=device, 
-        mode='max',
+        mode='99.9%',
         momentum=0.1
     )
     
@@ -179,17 +194,21 @@ def get_snn_residual_map(img_path, cfg, model_snn, device, timesteps=50):
         
         # Run SNN for multiple timesteps
         outputs = []
-        print(f"DEBUG: Running SNN with {timesteps} timesteps")  # ADD THIS
+        print(f"DEBUG: Running SNN with {timesteps} timesteps")
         with torch.no_grad():
             for t in range(timesteps):
                 output = model_snn(test_tensor)
                 outputs.append(output)
-                if t == 0:  # ADD THIS
-                    print(f"DEBUG: First timestep output range: [{output.min():.4f}, {output.max():.4f}]")
+                if t < 3:  # Print first 3 timesteps
+                    print(f"DEBUG: Timestep {t} output range: [{output.min():.4f}, {output.max():.4f}]")
 
         # Average outputs over time (rate coding)
         decoded_tensor = torch.stack(outputs).mean(dim=0)
-        print(f"DEBUG: Final averaged output range: [{decoded_tensor.min():.4f}, {decoded_tensor.max():.4f}]")  # ADD THIS
+        print(f"DEBUG: Final averaged output range: [{decoded_tensor.min():.4f}, {decoded_tensor.max():.4f}]")
+
+        # Check if outputs are actually different
+        output_variance = torch.stack(outputs).var(dim=0).mean()
+        print(f"DEBUG: Output variance across timesteps: {output_variance:.6f}")
         
         # Apply sigmoid to get [0,1] range
         decoded_tensor = torch.sigmoid(decoded_tensor)
@@ -305,6 +324,90 @@ def calculate_snn_image_auc(cfg, model_snn, device, timesteps=4):
     print(f"DEBUG: Score range: [{min(all_scores):.4f}, {max(all_scores):.4f}]")  # ADD THIS
     return image_auc, fpr, tpr, thresholds
 
+def calculate_snn_pixel_auc(cfg, model_snn, device, timesteps=80):
+    """Calculate Pixel-level AUC for SNN model using ground truth masks"""
+    print('Calculating SNN Pixel-level AUC...')
+    
+    # Check if ground truth folder exists
+    gt_dir = cfg.test_dir.replace('test', 'ground_truth')
+    if not os.path.exists(gt_dir):
+        print(f"Warning: Ground truth directory not found: {gt_dir}")
+        print("Pixel-level AUC requires ground truth masks")
+        return None
+    
+    all_pixel_scores = []
+    all_pixel_labels = []
+    
+    # Process defective samples only (good samples don't have GT masks)
+    defect_folders = [folder for folder in os.listdir(cfg.test_dir) 
+                     if folder != 'good' and os.path.isdir(os.path.join(cfg.test_dir, folder))]
+    
+    processed_count = 0
+    for folder in defect_folders:
+        test_files = glob(os.path.join(cfg.test_dir, folder, '*'))
+        gt_folder_path = os.path.join(gt_dir, folder)
+        
+        if not os.path.exists(gt_folder_path):
+            continue
+            
+        for test_path in test_files:
+            # Find corresponding ground truth mask
+            filename = os.path.splitext(os.path.basename(test_path))[0]
+            possible_gt_extensions = ['.png', '.bmp', '.jpg', '.jpeg']
+            gt_path = None
+            
+            for ext in possible_gt_extensions:
+                potential_gt_path = os.path.join(gt_folder_path, filename + '_mask' + ext)
+                if os.path.exists(potential_gt_path):
+                    gt_path = potential_gt_path
+                    break
+                # Try without '_mask' suffix
+                potential_gt_path = os.path.join(gt_folder_path, filename + ext)
+                if os.path.exists(potential_gt_path):
+                    gt_path = potential_gt_path
+                    break
+            
+            if gt_path is None:
+                continue
+                
+            try:
+                # Get residual maps
+                _, _, ssim_res, l1_res = get_snn_residual_map(test_path, cfg, model_snn, device, timesteps)
+                combined_score = ssim_res + l1_res
+                
+                # Load and process ground truth
+                gt_mask = cv2.imread(gt_path, 0)
+                if gt_mask is None:
+                    continue
+                    
+                # Resize GT mask to match residual map size
+                if gt_mask.shape != combined_score.shape:
+                    gt_mask = cv2.resize(gt_mask, (combined_score.shape[1], combined_score.shape[0]))
+                
+                # Binarize ground truth (threshold at 127)
+                gt_binary = (gt_mask > 127).astype(int)
+                
+                # Flatten and add to arrays
+                all_pixel_scores.extend(combined_score.flatten())
+                all_pixel_labels.extend(gt_binary.flatten())
+                processed_count += 1
+                
+            except Exception as e:
+                print(f"Error processing {test_path}: {e}")
+    
+    if processed_count == 0:
+        print("Warning: No valid image-mask pairs found for pixel-level AUC")
+        return None
+    
+    if len(set(all_pixel_labels)) < 2:
+        print("Warning: Need both normal and defective pixels for AUC calculation")
+        return None
+    
+    # Calculate pixel-level AUC
+    pixel_auc = roc_auc_score(all_pixel_labels, all_pixel_scores)
+    print(f'SNN Pixel-level AUC: {pixel_auc:.4f} (processed {processed_count} images)')
+    
+    return pixel_auc
 
 def get_snn_threshold(cfg, model_snn, device, timesteps=50):
     """Estimate threshold for SNN model"""
@@ -335,7 +438,7 @@ def get_depressing_mask(cfg):
     cfg.depr_mask = depr_mask
 
 
-def save_snn_results(cfg, image_auc_data, save_dir, timesteps):
+def save_snn_results(cfg, image_auc_data, pixel_auc, save_dir, timesteps):
     """Save SNN evaluation results"""
     results_path = os.path.join(save_dir, 'snn_results.txt')
     with open(results_path, 'w') as f:
@@ -351,6 +454,10 @@ def save_snn_results(cfg, image_auc_data, save_dir, timesteps):
             f.write(f"SNN Image-level AUC: {image_auc_data[0]:.4f}\n")
         else:
             f.write("SNN Image-level AUC: N/A\n")
+        if pixel_auc is not None:
+            f.write(f"SNN Pixel-level AUC: {pixel_auc:.4f}\n")
+        else:
+            f.write("SNN Pixel-level AUC: N/A (requires ground truth masks)\n")
     
     print(f"SNN results saved to: {results_path}")
 
@@ -379,7 +486,7 @@ def verify_conversion(model_ann, model_snn):
 
 if __name__ == '__main__':
     cfg = Options().parse()
-    timesteps = 100  # Number of timesteps for SNN inference
+    timesteps = 10  # Number of timesteps for SNN inference
     
     print("=" * 60)
     print("ANN TO SNN CONVERSION AND TESTING")
@@ -413,32 +520,12 @@ if __name__ == '__main__':
     print("SNN MODEL EVALUATION")
     print("="*50)
     
-    # Calculate SNN Image-level AUC
+    # Calculate SNN AUC
     snn_image_auc_data = calculate_snn_image_auc(cfg, model_snn, device, timesteps)
-    
+    snn_pixel_auc = calculate_snn_pixel_auc(cfg, model_snn, device, timesteps)
+
     # Step 7: Save results
-    save_snn_results(cfg, snn_image_auc_data, snn_save_dir, timesteps)
-    
-    # Step 8: Plot ROC curve for SNN
-    if snn_image_auc_data[0] is not None:
-        image_auc, fpr, tpr, thresholds = snn_image_auc_data
-        
-        plt.figure(figsize=(8, 6))
-        plt.plot(fpr, tpr, linewidth=2, label=f'SNN Image AUC = {image_auc:.4f}')
-        plt.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Random (AUC = 0.5)')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate', fontsize=12)
-        plt.ylabel('True Positive Rate', fontsize=12)
-        plt.title(f'SNN ROC Curve - {cfg.name.upper()} (T={timesteps})', fontsize=14)
-        plt.legend(fontsize=12)
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        
-        roc_path = os.path.join(snn_save_dir, 'snn_roc_curve.png')
-        plt.savefig(roc_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f'SNN ROC curve saved to: {roc_path}')
+    save_snn_results(cfg, snn_image_auc_data, snn_pixel_auc, snn_save_dir, timesteps)
     
     print("\n" + "="*60)
     print("CONVERSION AND TESTING COMPLETED!")
@@ -449,5 +536,7 @@ if __name__ == '__main__':
     
     if snn_image_auc_data[0] is not None:
         print(f"SNN Image-level AUC: {snn_image_auc_data[0]:.4f}")
+    if snn_pixel_auc is not None:
+        print(f"SNN Pixel-level AUC: {snn_pixel_auc:.4f}")
     
     print("Conversion and testing completed!")
