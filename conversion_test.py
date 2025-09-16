@@ -199,7 +199,7 @@ def get_snn_residual_map(img_path, cfg, model_snn, device, timesteps=50):
             for t in range(timesteps):
                 output = model_snn(test_tensor)
                 outputs.append(output)
-                if t < 3:  # Print first 3 timesteps
+                if t < 2:  # Print first 2 timesteps
                     print(f"DEBUG: Timestep {t} output range: [{output.min():.4f}, {output.max():.4f}]")
 
         # Average outputs over time (rate coding)
