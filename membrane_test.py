@@ -305,7 +305,7 @@ def calculate_image_auc(cfg, model_snn, device, timesteps=50):
     all_labels = []
     
     # Process good samples
-    good_files = glob(os.path.join(cfg.test_dir, 'good', '*'))[:20]  # Limit for testing
+    good_files = glob(os.path.join(cfg.test_dir, 'good', '*'))
     for img_path in good_files:
         try:
             _, _, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps)
@@ -319,8 +319,8 @@ def calculate_image_auc(cfg, model_snn, device, timesteps=50):
     defect_folders = [folder for folder in os.listdir(cfg.test_dir) 
                      if folder != 'good' and os.path.isdir(os.path.join(cfg.test_dir, folder))]
     
-    for folder in defect_folders[:2]:  # Limit to 2 defect types for testing
-        defect_files = glob(os.path.join(cfg.test_dir, folder, '*'))[:10]  # Limit samples
+    for folder in defect_folders: 
+        defect_files = glob(os.path.join(cfg.test_dir, folder, '*'))
         for img_path in defect_files:
             try:
                 _, _, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps)
@@ -415,7 +415,7 @@ def test_timestep_effect():
     
     # Print summary
     print("\n" + "="*50)
-    print("TIMESTEP ANALYSIS RESULTS {cfg.name}")
+    print(f"TIMESTEP ANALYSIS RESULTS {cfg.name}")
     print("="*50)
     
     if results:

@@ -99,7 +99,7 @@ def convert_to_snn(model_ann, cfg, device):
 def get_snn_residual_map(img_path, cfg, model_snn, device, timesteps=50):
     """Get residual map using pure SNN model with spike accumulation"""
     test_img = read_img(img_path, cfg.grayscale)
-    
+    functional.reset_net(model_snn)
     # Resize and crop image
     if test_img.shape[:2] != (cfg.im_resize, cfg.im_resize):
         test_img = cv2.resize(test_img, (cfg.im_resize, cfg.im_resize))
@@ -110,8 +110,10 @@ def get_snn_residual_map(img_path, cfg, model_snn, device, timesteps=50):
     test_img_norm = test_img / 255.0
     
     if test_img.shape[:2] == (cfg.patch_size, cfg.patch_size):
+        # print("Processing single patch")
         decoded_img = process_single_patch_snn(test_img_norm, cfg, model_snn, device, timesteps)
     else:
+        # print("Processing multiple patches")
         decoded_img = process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timesteps)
     
     # Calculate residual maps
@@ -151,14 +153,16 @@ def process_single_patch_snn(test_img_norm, cfg, model_snn, device, timesteps):
             
             if spike_accumulator is None:
                 spike_accumulator = spikes.clone()
+                # print('no accumulator')
             else:
                 spike_accumulator += spikes
+                # print('accumulator')
     
     # Convert spike accumulation to analog output (rate coding)
     decoded_tensor = spike_accumulator.float() / timesteps
     
     # Apply sigmoid for better reconstruction
-    decoded_tensor = torch.sigmoid(decoded_tensor * 6.0 - 3.0)
+    # decoded_tensor = torch.sigmoid(decoded_tensor)
     
     if cfg.grayscale:
         return decoded_tensor.squeeze().cpu().numpy()
@@ -191,12 +195,14 @@ def process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timestep
                 batch_spikes = model_snn(batch)
                 if batch_accumulator is None:
                     batch_accumulator = batch_spikes.clone()
+                    # print('no accumulator')
                 else:
                     batch_accumulator += batch_spikes
+                    # print('accumulator')
             
             # Convert to analog
             decoded_batch = batch_accumulator.float() / timesteps
-            decoded_batch = torch.sigmoid(decoded_batch * 6.0 - 3.0)
+            # decoded_batch = torch.sigmoid(decoded_batch)
             
             if cfg.grayscale:
                 decoded_batch = decoded_batch.squeeze(1).cpu().numpy()
@@ -384,7 +390,7 @@ def test_timestep_effect():
         return
     
     # Test different timesteps
-    timesteps_to_test = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    timesteps_to_test = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 200]
     results = []
     
     print(f"\n=== TESTING DIFFERENT TIMESTEPS ===")
