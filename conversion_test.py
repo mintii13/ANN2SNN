@@ -162,7 +162,7 @@ def process_single_patch_snn(test_img_norm, cfg, model_snn, device, timesteps):
     decoded_tensor = spike_accumulator.float() / timesteps
     
     # Apply sigmoid for better reconstruction
-    # decoded_tensor = torch.sigmoid(decoded_tensor)
+    decoded_tensor = torch.sigmoid(decoded_tensor)
     
     if cfg.grayscale:
         return decoded_tensor.squeeze().cpu().numpy()
@@ -202,7 +202,7 @@ def process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timestep
             
             # Convert to analog
             decoded_batch = batch_accumulator.float() / timesteps
-            # decoded_batch = torch.sigmoid(decoded_batch)
+            decoded_batch = torch.sigmoid(decoded_batch)
             
             if cfg.grayscale:
                 decoded_batch = decoded_batch.squeeze(1).cpu().numpy()
