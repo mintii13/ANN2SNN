@@ -108,7 +108,7 @@ def convert_to_snn(model_ann, cfg, device):
     converter = ann2snn.Converter(
         dataloader=calib_dataloader, 
         device=device, 
-        mode= 0.5,
+        mode= 'max',
         momentum=0.1
     )
     
@@ -236,145 +236,129 @@ def process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timestep
     
     decoded_patches = np.concatenate(decoded_patches, axis=0)
     return patch2img(decoded_patches, cfg.im_resize, cfg.patch_size, cfg.stride)
-def calculate_pixel_auc(cfg, model_snn, device, timesteps=80):
-    """Calculate Pixel-level AUC using ground truth masks - Follow test.py logic"""
-    print('Calculating SNN Pixel-level AUC...')
+
+def save_reconstructions_from_data(cfg, reconstruction_data, timesteps):
+    """Save reconstructions from pre-computed data"""
+    if not reconstruction_data:
+        return
+        
+    print(f"Saving {len(reconstruction_data)} SNN reconstruction images (T={timesteps})...")
     
-    # Check if ground truth folder exists  
-    gt_dir = cfg.test_dir.replace('test', 'ground_truth')
-    if not os.path.exists(gt_dir):
-        print(f"Warning: Ground truth directory not found: {gt_dir}")
-        print("Pixel-level AUC requires ground truth masks")
-        return None
+    saved_count = 0
+    for folder, img_name, rec_img in reconstruction_data:
+        try:
+            snn_rec_path = os.path.join(cfg.save_dir, f'{folder}_{img_name}_snn_rec_T{timesteps}.png')
+            cv2.imwrite(snn_rec_path, rec_img)
+            saved_count += 1
+        except Exception as e:
+            print(f"Error saving {folder}_{img_name}: {e}")
     
+    print(f"Saved {saved_count} SNN reconstruction images to {cfg.save_dir}")
+
+def test_single_timestep_combined(cfg, model_snn, device, timesteps, save_reconstructions=False):
+    """Calculate both image and pixel AUC in single pass - no duplicate calls"""
+    print(f'Testing T={timesteps} timesteps (combined image+pixel AUC)...')
+    
+    # Image-level data
+    all_img_scores = []
+    all_img_labels = []
+    
+    # Pixel-level data  
     all_pixel_scores = []
     all_pixel_labels = []
     
-    # Process defective samples only (good samples don't have GT masks)
-    defect_folders = [folder for folder in os.listdir(cfg.test_dir) 
-                     if folder != 'good' and os.path.isdir(os.path.join(cfg.test_dir, folder))]
+    # Reconstruction data
+    reconstruction_data = [] if save_reconstructions else None
     
-    processed_count = 0
-    for folder in defect_folders:
-        test_files = glob(os.path.join(cfg.test_dir, folder, '*'))
-        gt_folder_path = os.path.join(gt_dir, folder)
-        
-        if not os.path.exists(gt_folder_path):
-            continue
-            
-        for test_path in test_files:
-            # Find corresponding ground truth mask - SAME AS test.py
-            filename = os.path.splitext(os.path.basename(test_path))[0]
-            possible_gt_extensions = ['.png', '.bmp', '.jpg', '.jpeg']
-            gt_path = None
-            
-            for ext in possible_gt_extensions:
-                potential_gt_path = os.path.join(gt_folder_path, filename + '_mask' + ext)
-                if os.path.exists(potential_gt_path):
-                    gt_path = potential_gt_path
-                    break
-                # Try without '_mask' suffix
-                potential_gt_path = os.path.join(gt_folder_path, filename + ext)
-                if os.path.exists(potential_gt_path):
-                    gt_path = potential_gt_path
-                    break
-            
-            if gt_path is None:
-                continue
-                
-            try:
-                # Get residual maps using SNN
-                _, _, ssim_res, l1_res = get_snn_residual_map(test_path, cfg, model_snn, device, timesteps)
-                combined_score = ssim_res + l1_res  # ✓ SAME AS test.py
-                
-                # Load and process ground truth - SAME AS test.py
-                gt_mask = cv2.imread(gt_path, 0)
-                if gt_mask is None:
-                    continue
-                    
-                # Resize GT mask to match residual map size
-                if gt_mask.shape != combined_score.shape:
-                    gt_mask = cv2.resize(gt_mask, (combined_score.shape[1], combined_score.shape[0]))
-                
-                # Binarize ground truth (threshold at 127) - SAME AS test.py
-                gt_binary = (gt_mask > 127).astype(int)
-                
-                # Flatten and add to arrays - SAME AS test.py
-                all_pixel_scores.extend(combined_score.flatten())
-                all_pixel_labels.extend(gt_binary.flatten())
-                processed_count += 1
-                
-            except Exception as e:
-                print(f"Error processing {test_path}: {e}")
-    
-    if processed_count == 0:
-        print("Warning: No valid image-mask pairs found for pixel-level AUC")
-        return None
-    
-    if len(set(all_pixel_labels)) < 2:
-        print("Warning: Need both normal and defective pixels for AUC calculation")
-        return None
-
-    # Calculate metrics with TP/FP
-    pixel_auc, tp, fp, tn, fn, threshold, tpr, fpr = calculate_metrics_with_optimal_threshold(all_pixel_labels, all_pixel_scores)
-    print(f'SNN Pixel-level AUC: {pixel_auc:.4f}')
-    print(f'Optimal threshold: {threshold:.6f}')
-    print(f'At optimal threshold - TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}')
-    print(f'TPR (Sensitivity): {tpr:.4f}, FPR: {fpr:.4f}')
-    print(f'Processed {processed_count} images')
-    
-    return pixel_auc, tp, fp, tn, fn, tpr, fpr
-
-def calculate_image_auc(cfg, model_snn, device, timesteps=50, debug_print=False):
-    """Calculate Image-level AUC for SNN model"""
-    print(f'Calculating SNN Image-level AUC with {timesteps} timesteps...')
-    
-    all_scores = []
-    all_labels = []
-    processed_count = 0
+    # Check ground truth directory
+    gt_dir = cfg.test_dir.replace('test', 'ground_truth')
+    has_gt = os.path.exists(gt_dir)
     
     # Process good samples
     good_files = glob(os.path.join(cfg.test_dir, 'good', '*'))
     for img_path in good_files:
         try:
-            debug_this = debug_print and processed_count == 0  # Only debug first image
-            _, _, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps, debug_this)
-            score = np.max(ssim_res + l1_res)
-            all_scores.append(score)
-            all_labels.append(0)
-            processed_count += 1
+            # SINGLE CALL per image
+            test_img, rec_img, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps)
+            combined_score = ssim_res + l1_res
+            
+            # Image-level score
+            img_score = np.max(combined_score)
+            all_img_scores.append(img_score)
+            all_img_labels.append(0)
+            
+            # Save reconstruction if needed
+            if save_reconstructions:
+                img_name = os.path.splitext(os.path.basename(img_path))[0]
+                reconstruction_data.append(('good', img_name, rec_img))
+                
         except Exception as e:
             print(f"Error processing {img_path}: {e}")
     
-    # Process defective samples
+    # Process defect samples
     defect_folders = [folder for folder in os.listdir(cfg.test_dir) 
                      if folder != 'good' and os.path.isdir(os.path.join(cfg.test_dir, folder))]
     
     for folder in defect_folders:
         defect_files = glob(os.path.join(cfg.test_dir, folder, '*'))
+        gt_folder_path = os.path.join(gt_dir, folder) if has_gt else None
+        
         for img_path in defect_files:
             try:
-                _, _, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps)
-                score = np.max(ssim_res + l1_res)
-                all_scores.append(score)
-                all_labels.append(1)
+                # SINGLE CALL per image
+                test_img, rec_img, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps)
+                combined_score = ssim_res + l1_res
+                
+                # Image-level score
+                img_score = np.max(combined_score)
+                all_img_scores.append(img_score)
+                all_img_labels.append(1)
+                
+                # Pixel-level score (if GT exists)
+                if has_gt and gt_folder_path and os.path.exists(gt_folder_path):
+                    filename = os.path.splitext(os.path.basename(img_path))[0]
+                    gt_path = None
+                    
+                    # Find GT mask
+                    for ext in ['.png', '.bmp', '.jpg', '.jpeg']:
+                        for suffix in ['_mask', '']:
+                            potential_gt = os.path.join(gt_folder_path, filename + suffix + ext)
+                            if os.path.exists(potential_gt):
+                                gt_path = potential_gt
+                                break
+                        if gt_path:
+                            break
+                    
+                    if gt_path:
+                        gt_mask = cv2.imread(gt_path, 0)
+                        if gt_mask is not None:
+                            if gt_mask.shape != combined_score.shape:
+                                gt_mask = cv2.resize(gt_mask, (combined_score.shape[1], combined_score.shape[0]))
+                            gt_binary = (gt_mask > 127).astype(int)
+                            all_pixel_scores.extend(combined_score.flatten())
+                            all_pixel_labels.extend(gt_binary.flatten())
+                
+                # Save reconstruction if needed
+                if save_reconstructions:
+                    img_name = os.path.splitext(os.path.basename(img_path))[0]
+                    reconstruction_data.append((folder, img_name, rec_img))
+                    
             except Exception as e:
                 print(f"Error processing {img_path}: {e}")
     
-    if len(set(all_labels)) < 2:
-        print("Warning: Need both normal and defective samples for AUC calculation")
-        return None, None, None, None, None
+    # Calculate image AUC
+    img_results = None
+    if len(set(all_img_labels)) == 2:
+        img_results = calculate_metrics_with_optimal_threshold(all_img_labels, all_img_scores)
+        print(f'SNN Image-level AUC: {img_results[0]:.4f}')
     
-    # Calculate metrics with TP/FP
-    image_auc, tp, fp, tn, fn, threshold, tpr, fpr = calculate_metrics_with_optimal_threshold(all_labels, all_scores)
+    # Calculate pixel AUC
+    pixel_results = None
+    if len(all_pixel_labels) > 0 and len(set(all_pixel_labels)) == 2:
+        pixel_results = calculate_metrics_with_optimal_threshold(all_pixel_labels, all_pixel_scores)
+        print(f'SNN Pixel-level AUC: {pixel_results[0]:.4f}')
     
-    print(f'SNN Image-level AUC: {image_auc:.4f}')
-    print(f'Optimal threshold: {threshold:.6f}')
-    print(f'At optimal threshold - TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}')
-    print(f'TPR (Sensitivity): {tpr:.4f}, FPR: {fpr:.4f}')
-    print(f'Processed {len(all_scores)} samples (Good: {all_labels.count(0)}, Defect: {all_labels.count(1)})')
-    
-    return image_auc, tp, fp, tn, fn, tpr, fpr
+    return img_results, pixel_results, reconstruction_data
 
 
 def verify_snn_conversion(model_snn):
@@ -406,7 +390,6 @@ def verify_snn_conversion(model_snn):
 
 
 def test_timestep_effect():
-    """Test how different timesteps affect SNN performance"""
     cfg = Options().parse()
     
     print("=" * 60)
@@ -426,30 +409,38 @@ def test_timestep_effect():
     # Test different timesteps
     timesteps_to_test = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
     results = []
+    all_reconstruction_data = {}  # Store reconstruction data cho mỗi timestep
     
     print(f"\n=== TESTING DIFFERENT TIMESTEPS ===")
     
     for T in timesteps_to_test:
         print(f"\n--- Testing T={T} timesteps ---")
         try:
-            # Enable debug for first timestep only
-            debug_print = True
+            # ALWAYS save reconstruction data
+            img_results, pixel_results, rec_data = test_single_timestep_combined(
+                cfg, model_snn, device, T, save_reconstructions=True
+            )
             
-            # Calculate both image and pixel AUC with TP/FP
-            image_results = calculate_image_auc(cfg, model_snn, device, T, debug_print)
-            pixel_results = calculate_pixel_auc(cfg, model_snn, device, T)
+            # Store reconstruction data
+            all_reconstruction_data[T] = rec_data
+            # SAVE NGAY sau khi test xong timestep này
+            if rec_data:
+                print(f"Saving reconstructions for T={T} immediately...")
+                save_reconstructions_from_data(cfg, rec_data, T)
             
-            if image_results[0] is not None:
-                img_auc, img_tp, img_fp, img_tn, img_fn, img_tpr, img_fpr = image_results
-                if pixel_results[0] is not None:
-                    pix_auc, pix_tp, pix_fp, pix_tn, pix_fn, pix_tpr, pix_fpr = pixel_results
+            if img_results is not None:
+                img_auc, img_tp, img_fp, img_tn, img_fn, img_threshold, img_tpr, img_fpr = img_results
+                
+                if pixel_results is not None:
+                    pix_auc, pix_tp, pix_fp, pix_tn, pix_fn, pix_threshold, pix_tpr, pix_fpr = pixel_results
                     results.append((T, img_auc, pix_auc, img_tp, img_fp, img_tpr, img_fpr, pix_tp, pix_fp, pix_tpr, pix_fpr))
                 else:
                     results.append((T, img_auc, None, img_tp, img_fp, img_tpr, img_fpr, None, None, None, None))
+                    
         except Exception as e:
             print(f"T={T}: Error - {e}")
     
-    # Print summary
+    # Print summary (existing code unchanged)
     print("\n" + "="*50)
     print(f"TIMESTEP ANALYSIS RESULTS {cfg.name}")
     print("="*50)
@@ -459,7 +450,7 @@ def test_timestep_effect():
         print("-" * 90)
         
         for result in results:
-            if len(result) == 11:  # T, img_auc, pix_auc, img_tp, img_fp, img_tpr, img_fpr, pix_tp, pix_fp, pix_tpr, pix_fpr
+            if len(result) == 11:
                 T, img_auc, pix_auc, img_tp, img_fp, img_tpr, img_fpr, pix_tp, pix_fp, pix_tpr, pix_fpr = result
                 
                 img_auc_str = f"{img_auc:.4f}" if img_auc is not None else "N/A"
@@ -468,7 +459,6 @@ def test_timestep_effect():
                 
                 if pix_auc is not None:
                     pix_auc_str = f"{pix_auc:.4f}"
-                    # Format large numbers for pixel-level
                     pix_tp_str = f"{pix_tp//1000}k" if pix_tp > 1000 else str(pix_tp)
                     pix_fp_str = f"{pix_fp//1000}k" if pix_fp > 1000 else str(pix_fp)
                     pix_tp_fp = f"{pix_tp_str}/{pix_fp_str}"
@@ -479,21 +469,23 @@ def test_timestep_effect():
                     pix_tpr_fpr = "N/A"
                 
                 print(f"{T:3d} | {img_auc_str:>8} | {img_tp_fp:>6} | {img_tpr_fpr:>9} | {pix_auc_str:>8} | {pix_tp_fp:>10} | {pix_tpr_fpr:>9}")
-            elif len(result) == 7:  # Backward compatibility
-                T, img_auc, pix_auc, img_tp, img_fp, pix_tp, pix_fp = result
-                print(f"{T:3d} | {img_auc:.4f} | {img_tp}/{img_fp} | N/A | {pix_auc:.4f} if pix_auc else 'N/A' | {pix_tp//1000}k/{pix_fp//1000}k | N/A")
-            else:
-                print(f"T={result[0]:3d} | Unexpected format ({len(result)} values)")
         
-        # Find best results
-        valid_results = [r for r in results if len(r) >= 2 and r[1] is not None]
-        if valid_results:
-            best_T, best_auc = max(valid_results, key=lambda x: x[1])[:2]
-            print(f"\nBest Image AUC: T={best_T} with AUC={best_auc:.4f}")
+        # # TÌM timestep có pixel AUC cao nhất
+        # valid_pixel_results = [r for r in results if len(r) >= 3 and r[2] is not None]
+        # if valid_pixel_results:
+        #     best_pixel_result = max(valid_pixel_results, key=lambda x: x[2])
+        #     best_pixel_T, _, best_pixel_auc = best_pixel_result[:3]
             
-            if len(valid_results[0]) > 2 and any(r[2] is not None for r in valid_results):
-                best_pix_T, _, best_pix_auc = max([r for r in valid_results if r[2] is not None], key=lambda x: x[2])[:3]
-                print(f"Best Pixel AUC: T={best_pix_T} with AUC={best_pix_auc:.4f}")
+        #     print(f"\nBest Pixel AUC: T={best_pixel_T} with AUC={best_pixel_auc:.4f}")
+            
+        #     # Save reconstructions cho timestep có pixel AUC cao nhất
+        #     if best_pixel_T in all_reconstruction_data:
+        #         print(f"Saving SNN reconstructions for best pixel AUC timestep (T={best_pixel_T})...")
+        #         save_reconstructions_from_data(cfg, all_reconstruction_data[best_pixel_T], best_pixel_T)
+        #     else:
+        #         print(f"Warning: No reconstruction data found for T={best_pixel_T}")
+        # else:
+        #     print("No valid pixel AUC results found for saving reconstructions")
     else:
         print("No valid results obtained")
 
