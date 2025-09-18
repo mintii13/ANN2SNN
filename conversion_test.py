@@ -6,13 +6,37 @@ from skimage.metrics import structural_similarity as ssim
 from glob import glob
 import cv2
 import os
-from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix
 
 from spikingjelly.activation_based import ann2snn, functional
 from utils import read_img, get_patch, patch2img
 from network import AutoEncoder
 from options import Options
 
+def debug_snn_structure(model_snn):
+    """Debug SNN internal structure and state"""
+    print("\n=== SNN STRUCTURE DEBUG ===")
+    membrane_count = 0
+    reset_count = 0
+    
+    for name, module in model_snn.named_modules():
+        module_type = str(type(module))
+        if hasattr(module, 'v'):  # Membrane potential
+            print(f"{name}: has membrane potential (v)")
+            membrane_count += 1
+        if hasattr(module, 'reset'):  # Reset function  
+            print(f"{name}: has reset function")
+            reset_count += 1
+        if 'IFNode' in module_type:
+            print(f"{name}: IFNode - v_threshold={getattr(module, 'v_threshold', 'N/A')}")
+    
+    print(f"Total modules with membrane potential: {membrane_count}")
+    print(f"Total modules with reset function: {reset_count}")
+    
+    if membrane_count == 0:
+        print("⚠️  WARNING: No membrane potentials found - SNN may not have temporal dynamics")
+    if reset_count == 0:
+        print("⚠️  WARNING: No reset functions found - State may not reset between samples")
 
 class CalibrationDataset(Dataset):
     """Dataset for SNN conversion calibration"""
@@ -35,7 +59,6 @@ class CalibrationDataset(Dataset):
         else:
             img = torch.FloatTensor(img).permute(2, 0, 1)
         return img, torch.tensor(0)
-
 
 def load_model(cfg):
     """Load trained ANN model"""
@@ -85,7 +108,7 @@ def convert_to_snn(model_ann, cfg, device):
     converter = ann2snn.Converter(
         dataloader=calib_dataloader, 
         device=device, 
-        mode='max',
+        mode= 0.5,
         momentum=0.1
     )
     
@@ -95,8 +118,27 @@ def convert_to_snn(model_ann, cfg, device):
     
     return model_snn
 
+def calculate_metrics_with_optimal_threshold(all_labels, all_scores):
+    """Calculate AUC and optimal threshold from ROC curve"""
+    from sklearn.metrics import roc_curve, confusion_matrix
+    
+    auc = roc_auc_score(all_labels, all_scores)
+    fpr, tpr, thresholds = roc_curve(all_labels, all_scores)
+    
+    # Find optimal threshold using Youden's J statistic (maximizes TPR - FPR)
+    optimal_idx = np.argmax(tpr - fpr)
+    optimal_threshold = thresholds[optimal_idx]
+    optimal_tpr = tpr[optimal_idx]
+    optimal_fpr = fpr[optimal_idx]
+    
+    # Calculate TP/FP with optimal threshold
+    predictions = (np.array(all_scores) >= optimal_threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(all_labels, predictions).ravel()
+    
+    return auc, tp, fp, tn, fn, optimal_threshold, optimal_tpr, optimal_fpr
 
-def get_snn_residual_map(img_path, cfg, model_snn, device, timesteps=50):
+
+def get_snn_residual_map(img_path, cfg, model_snn, device, timesteps=50, debug_print=False):
     """Get residual map using pure SNN model with spike accumulation"""
     test_img = read_img(img_path, cfg.grayscale)
     functional.reset_net(model_snn)
@@ -111,10 +153,10 @@ def get_snn_residual_map(img_path, cfg, model_snn, device, timesteps=50):
     
     if test_img.shape[:2] == (cfg.patch_size, cfg.patch_size):
         # print("Processing single patch")
-        decoded_img = process_single_patch_snn(test_img_norm, cfg, model_snn, device, timesteps)
+        decoded_img = process_single_patch_snn(test_img_norm, cfg, model_snn, device, timesteps, debug_print)
     else:
         # print("Processing multiple patches")
-        decoded_img = process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timesteps)
+        decoded_img = process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timesteps, debug_print)
     
     # Calculate residual maps
     rec_img = np.reshape((decoded_img * 255.).astype('uint8'), test_img.shape)
@@ -133,7 +175,7 @@ def get_snn_residual_map(img_path, cfg, model_snn, device, timesteps=50):
     return test_img, rec_img, ssim_residual_map, l1_residual_map
 
 
-def process_single_patch_snn(test_img_norm, cfg, model_snn, device, timesteps):
+def process_single_patch_snn(test_img_norm, cfg, model_snn, device, timesteps, debug_print=False):
     """Process single patch through SNN with proper spike accumulation"""
     if cfg.grayscale:
         test_tensor = torch.FloatTensor(test_img_norm).unsqueeze(0).unsqueeze(0).to(device)
@@ -142,35 +184,22 @@ def process_single_patch_snn(test_img_norm, cfg, model_snn, device, timesteps):
     
     # Reset SNN state
     functional.reset_net(model_snn)
-    
-    # Accumulate spikes over timesteps
-    spike_accumulator = None
-    
     with torch.no_grad():
         for t in range(timesteps):
-            # SNN output is spikes (0 or 1)
-            spikes = model_snn(test_tensor)
-            
-            if spike_accumulator is None:
-                spike_accumulator = spikes.clone()
-                # print('no accumulator')
+            if t == 0:
+                output = model_snn(test_tensor)  # Constant analog input
             else:
-                spike_accumulator += spikes
-                # print('accumulator')
+                output += model_snn(test_tensor)  # Tích lũy output
     
-    # Convert spike accumulation to analog output (rate coding)
-    decoded_tensor = spike_accumulator.float() / timesteps
-    
-    # Apply sigmoid for better reconstruction
+    # Chia cho timesteps để có firing rate
+    decoded_tensor = output / timesteps
     decoded_tensor = torch.sigmoid(decoded_tensor)
-    
     if cfg.grayscale:
         return decoded_tensor.squeeze().cpu().numpy()
     else:
         return decoded_tensor.squeeze().permute(1, 2, 0).cpu().numpy()
 
-
-def process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timesteps):
+def process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timesteps, debug_print=False):
     """Process multiple patches through SNN"""
     patches = get_patch(test_img_norm, cfg.patch_size, cfg.stride)
     
@@ -188,20 +217,14 @@ def process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timestep
             
             # Reset SNN state for each batch
             functional.reset_net(model_snn)
-            
-            # Accumulate spikes over timesteps
-            batch_accumulator = None
             for t in range(timesteps):
-                batch_spikes = model_snn(batch)
-                if batch_accumulator is None:
-                    batch_accumulator = batch_spikes.clone()
-                    # print('no accumulator')
+                if t == 0:
+                    batch_output = model_snn(batch)  # Constant analog input
                 else:
-                    batch_accumulator += batch_spikes
-                    # print('accumulator')
+                    batch_output += model_snn(batch)  # Tích lũy
             
-            # Convert to analog
-            decoded_batch = batch_accumulator.float() / timesteps
+            # Convert to firing rate
+            decoded_batch = batch_output / timesteps
             decoded_batch = torch.sigmoid(decoded_batch)
             
             if cfg.grayscale:
@@ -291,28 +314,35 @@ def calculate_pixel_auc(cfg, model_snn, device, timesteps=80):
     if len(set(all_pixel_labels)) < 2:
         print("Warning: Need both normal and defective pixels for AUC calculation")
         return None
-    
-    # Calculate pixel-level AUC - SAME AS test.py
-    pixel_auc = roc_auc_score(all_pixel_labels, all_pixel_scores)
-    print(f'SNN Pixel-level AUC: {pixel_auc:.4f} (processed {processed_count} images)')
-    
-    return pixel_auc
 
-def calculate_image_auc(cfg, model_snn, device, timesteps=50):
+    # Calculate metrics with TP/FP
+    pixel_auc, tp, fp, tn, fn, threshold, tpr, fpr = calculate_metrics_with_optimal_threshold(all_pixel_labels, all_pixel_scores)
+    print(f'SNN Pixel-level AUC: {pixel_auc:.4f}')
+    print(f'Optimal threshold: {threshold:.6f}')
+    print(f'At optimal threshold - TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}')
+    print(f'TPR (Sensitivity): {tpr:.4f}, FPR: {fpr:.4f}')
+    print(f'Processed {processed_count} images')
+    
+    return pixel_auc, tp, fp, tn, fn, tpr, fpr
+
+def calculate_image_auc(cfg, model_snn, device, timesteps=50, debug_print=False):
     """Calculate Image-level AUC for SNN model"""
     print(f'Calculating SNN Image-level AUC with {timesteps} timesteps...')
     
     all_scores = []
     all_labels = []
+    processed_count = 0
     
     # Process good samples
     good_files = glob(os.path.join(cfg.test_dir, 'good', '*'))
     for img_path in good_files:
         try:
-            _, _, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps)
+            debug_this = debug_print and processed_count == 0  # Only debug first image
+            _, _, ssim_res, l1_res = get_snn_residual_map(img_path, cfg, model_snn, device, timesteps, debug_this)
             score = np.max(ssim_res + l1_res)
             all_scores.append(score)
             all_labels.append(0)
+            processed_count += 1
         except Exception as e:
             print(f"Error processing {img_path}: {e}")
     
@@ -333,15 +363,18 @@ def calculate_image_auc(cfg, model_snn, device, timesteps=50):
     
     if len(set(all_labels)) < 2:
         print("Warning: Need both normal and defective samples for AUC calculation")
-        return None
+        return None, None, None, None, None
     
-    image_auc = roc_auc_score(all_labels, all_scores)
+    # Calculate metrics with TP/FP
+    image_auc, tp, fp, tn, fn, threshold, tpr, fpr = calculate_metrics_with_optimal_threshold(all_labels, all_scores)
     
     print(f'SNN Image-level AUC: {image_auc:.4f}')
+    print(f'Optimal threshold: {threshold:.6f}')
+    print(f'At optimal threshold - TP: {tp}, FP: {fp}, TN: {tn}, FN: {fn}')
+    print(f'TPR (Sensitivity): {tpr:.4f}, FPR: {fpr:.4f}')
     print(f'Processed {len(all_scores)} samples (Good: {all_labels.count(0)}, Defect: {all_labels.count(1)})')
-    print(f'Score range: [{min(all_scores):.4f}, {max(all_scores):.4f}]')
     
-    return image_auc
+    return image_auc, tp, fp, tn, fn, tpr, fpr
 
 
 def verify_snn_conversion(model_snn):
@@ -388,9 +421,10 @@ def test_timestep_effect():
     if not verify_snn_conversion(model_snn):
         print("SNN conversion failed. Exiting.")
         return
+    debug_snn_structure(model_snn)
     
     # Test different timesteps
-    timesteps_to_test = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 200]
+    timesteps_to_test = [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
     results = []
     
     print(f"\n=== TESTING DIFFERENT TIMESTEPS ===")
@@ -398,19 +432,20 @@ def test_timestep_effect():
     for T in timesteps_to_test:
         print(f"\n--- Testing T={T} timesteps ---")
         try:
-            # Calculate both image and pixel AUC
-            image_auc = calculate_image_auc(cfg, model_snn, device, T)
-            pixel_auc = calculate_pixel_auc(cfg, model_snn, device, T)
+            # Enable debug for first timestep only
+            debug_print = True
             
-            if image_auc is not None:
-                results.append((T, image_auc, pixel_auc))
-                print(f"T={T}: Image AUC = {image_auc:.4f}", end="")
-                if pixel_auc is not None:
-                    print(f", Pixel AUC = {pixel_auc:.4f}")
+            # Calculate both image and pixel AUC with TP/FP
+            image_results = calculate_image_auc(cfg, model_snn, device, T, debug_print)
+            pixel_results = calculate_pixel_auc(cfg, model_snn, device, T)
+            
+            if image_results[0] is not None:
+                img_auc, img_tp, img_fp, img_tn, img_fn, img_tpr, img_fpr = image_results
+                if pixel_results[0] is not None:
+                    pix_auc, pix_tp, pix_fp, pix_tn, pix_fn, pix_tpr, pix_fpr = pixel_results
+                    results.append((T, img_auc, pix_auc, img_tp, img_fp, img_tpr, img_fpr, pix_tp, pix_fp, pix_tpr, pix_fpr))
                 else:
-                    print(f", Pixel AUC = N/A")
-            else:
-                print(f"T={T}: Failed to calculate AUC")
+                    results.append((T, img_auc, None, img_tp, img_fp, img_tpr, img_fpr, None, None, None, None))
         except Exception as e:
             print(f"T={T}: Error - {e}")
     
@@ -418,30 +453,47 @@ def test_timestep_effect():
     print("\n" + "="*50)
     print(f"TIMESTEP ANALYSIS RESULTS {cfg.name}")
     print("="*50)
-    
+
     if results:
-        print("Timestep -> Image AUC | Pixel AUC")
-        print("-" * 35)
+        print(f"{'T':>3} | {'Img AUC':>8} | {'TP/FP':>6} | {'TPR/FPR':>9} | {'Pix AUC':>8} | {'TP/FP':>10} | {'TPR/FPR':>9}")
+        print("-" * 90)
+        
         for result in results:
-            if len(result) == 3:  # T, image_auc, pixel_auc
-                T, image_auc, pixel_auc = result
-                pixel_str = f"{pixel_auc:.4f}" if pixel_auc is not None else "N/A"
-                print(f"T={T:3d}    -> {image_auc:.4f}   | {pixel_str}")
-            else:  # Old format compatibility
-                T, auc = result
-                print(f"T={T:3d}    -> {auc:.4f}   | N/A")
+            if len(result) == 11:  # T, img_auc, pix_auc, img_tp, img_fp, img_tpr, img_fpr, pix_tp, pix_fp, pix_tpr, pix_fpr
+                T, img_auc, pix_auc, img_tp, img_fp, img_tpr, img_fpr, pix_tp, pix_fp, pix_tpr, pix_fpr = result
+                
+                img_auc_str = f"{img_auc:.4f}" if img_auc is not None else "N/A"
+                img_tp_fp = f"{img_tp}/{img_fp}" if img_tp is not None else "N/A"
+                img_tpr_fpr = f"{img_tpr:.3f}/{img_fpr:.3f}" if img_tpr is not None else "N/A"
+                
+                if pix_auc is not None:
+                    pix_auc_str = f"{pix_auc:.4f}"
+                    # Format large numbers for pixel-level
+                    pix_tp_str = f"{pix_tp//1000}k" if pix_tp > 1000 else str(pix_tp)
+                    pix_fp_str = f"{pix_fp//1000}k" if pix_fp > 1000 else str(pix_fp)
+                    pix_tp_fp = f"{pix_tp_str}/{pix_fp_str}"
+                    pix_tpr_fpr = f"{pix_tpr:.3f}/{pix_fpr:.3f}"
+                else:
+                    pix_auc_str = "N/A"
+                    pix_tp_fp = "N/A"
+                    pix_tpr_fpr = "N/A"
+                
+                print(f"{T:3d} | {img_auc_str:>8} | {img_tp_fp:>6} | {img_tpr_fpr:>9} | {pix_auc_str:>8} | {pix_tp_fp:>10} | {pix_tpr_fpr:>9}")
+            elif len(result) == 7:  # Backward compatibility
+                T, img_auc, pix_auc, img_tp, img_fp, pix_tp, pix_fp = result
+                print(f"{T:3d} | {img_auc:.4f} | {img_tp}/{img_fp} | N/A | {pix_auc:.4f} if pix_auc else 'N/A' | {pix_tp//1000}k/{pix_fp//1000}k | N/A")
+            else:
+                print(f"T={result[0]:3d} | Unexpected format ({len(result)} values)")
         
-        # Find best image AUC
-        image_aucs = [(T, img_auc) for T, img_auc, _ in results if len(results[0]) == 3]
-        if image_aucs:
-            best_T, best_auc = max(image_aucs, key=lambda x: x[1])
+        # Find best results
+        valid_results = [r for r in results if len(r) >= 2 and r[1] is not None]
+        if valid_results:
+            best_T, best_auc = max(valid_results, key=lambda x: x[1])[:2]
             print(f"\nBest Image AUC: T={best_T} with AUC={best_auc:.4f}")
-        
-        # Find best pixel AUC if available
-        pixel_aucs = [(T, pix_auc) for T, _, pix_auc in results if len(results[0]) == 3 and pix_auc is not None]
-        if pixel_aucs:
-            best_pixel_T, best_pixel_auc = max(pixel_aucs, key=lambda x: x[1])
-            print(f"Best Pixel AUC: T={best_pixel_T} with AUC={best_pixel_auc:.4f}")
+            
+            if len(valid_results[0]) > 2 and any(r[2] is not None for r in valid_results):
+                best_pix_T, _, best_pix_auc = max([r for r in valid_results if r[2] is not None], key=lambda x: x[2])[:3]
+                print(f"Best Pixel AUC: T={best_pix_T} with AUC={best_pix_auc:.4f}")
     else:
         print("No valid results obtained")
 
