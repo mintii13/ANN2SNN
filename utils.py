@@ -126,6 +126,12 @@ def get_patch(image, new_size, stride):
 
 
 def patch2img(patches, im_size, patch_size, stride):
+    if len(patches.shape) == 3:
+        # Grayscale case: thêm channel dimension
+        patches = patches[:, :, :, np.newaxis]
+        is_grayscale = True
+    else:
+        is_grayscale = False
     img = np.zeros((im_size, im_size, patches.shape[3]+1))
     i, j = patch_size, patch_size
     k = 0
@@ -139,6 +145,8 @@ def patch2img(patches, im_size, patch_size, stride):
         i += stride
     mask=np.repeat(img[:,:,-1][...,np.newaxis], patches.shape[3], 2)
     img = img[:,:,:-1]/mask
+    if is_grayscale:
+        img = img[:,:,0]
     return img
 
 

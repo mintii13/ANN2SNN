@@ -85,7 +85,7 @@ def create_calibration_dataloader(cfg):
         raise ValueError(f"No training files found in {cfg.train_data_dir}")
     
     dataset = CalibrationDataset(good_files, cfg.grayscale, cfg.patch_size)
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=0)
+    dataloader = DataLoader(dataset, batch_size=64, shuffle=False, num_workers=0)
     
     print(f"Using {len(dataset)} training samples for calibration")
     return dataloader
@@ -208,7 +208,7 @@ def process_multiple_patches_snn(test_img_norm, cfg, model_snn, device, timestep
     else:
         patches_tensor = torch.FloatTensor(patches).permute(0, 3, 1, 2).to(device)
     
-    batch_size = 8  # Small batch size for SNN
+    batch_size = 64  # Small batch size for SNN
     decoded_patches = []
     
     with torch.no_grad():
@@ -420,9 +420,7 @@ def test_timestep_effect():
             img_results, pixel_results, rec_data = test_single_timestep_combined(
                 cfg, model_snn, device, T, save_reconstructions=True
             )
-            
-            # Store reconstruction data
-            all_reconstruction_data[T] = rec_data
+        
             # SAVE NGAY sau khi test xong timestep này
             if rec_data:
                 print(f"Saving reconstructions for T={T} immediately...")
