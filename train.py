@@ -69,23 +69,7 @@ class SSIMPlusL1Loss(nn.Module):
         ssim_loss = 1 - self.ssim(img1, img2)
         l1_loss = self.l1(img1, img2)
         return ssim_loss + self.alpha * l1_loss
-
-def calculate_val_loss(cfg, model, device, valid_loader, criterion, epoch):
-    """Only calculate validation loss"""
-    model.eval()
-    val_loss = 0.0
-    val_pbar = tqdm(valid_loader, desc=f'Epoch {epoch}/{cfg.epochs} [Val]', disable=DISABLE_PROGRESS)
-    with torch.no_grad():
-        for data, target in val_pbar:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            loss = criterion(output, target)
-            val_loss += loss.item()
-            val_pbar.set_postfix({'loss': f'{loss.item():.6f}'})
-    
-    avg_val_loss = val_loss / len(valid_loader)
-    return avg_val_loss
-    
+  
 def call_test_script(cfg, epoch):
     """Call test.py as subprocess and parse results"""
     # Import CLASS_CONFIGS from train_all.py
@@ -178,7 +162,7 @@ def init_wandb(cfg):
     try:
         run = wandb.init(
             project="ANN2SNN",
-            name=f"{cfg.name}_{cfg.loss}_{cfg.patch_size}px_sv_ReLU",
+            name=f"{cfg.name}_{cfg.loss}_{cfg.patch_size}px_sv_ReLU_nonStop",
             config=config,
             tags=[cfg.name, cfg.loss, "autoencoder"],
             notes=f"Autoencoder training on {cfg.name} dataset with {cfg.loss} loss"
@@ -195,13 +179,9 @@ if cfg.aug_dir and cfg.do_aug:
 
 dataset_dir = cfg.aug_dir if cfg.aug_dir else cfg.train_data_dir
 file_list = glob(dataset_dir + '/*')
-num_valid_data = int(np.ceil(len(file_list) * 0.2))
-
-train_dataset = ImageDataset(file_list[:-num_valid_data], cfg.grayscale)
-valid_dataset = ImageDataset(file_list[-num_valid_data:], cfg.grayscale)
-
+# Sử dụng toàn bộ train set
+train_dataset = ImageDataset(file_list, cfg.grayscale)
 train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True)
-valid_loader = DataLoader(valid_dataset, batch_size=cfg.batch_size, shuffle=False)
 
 # Model setup
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -222,16 +202,12 @@ optimizer = optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=cfg.decay)
 wandb_run = init_wandb(cfg)
 
 ################### Training loop ###################
-best_val_loss = float('inf')
 best_image_auc = 0.0
 best_pixel_auc = 0.0
-patience_counter = 0
-PATIENCE_LIMIT = 20
 
 print(f"Training on device: {device}")
 print(f"Dataset: {cfg.name}, Loss: {cfg.loss}")
-print(f"Train samples: {len(train_dataset)}, Validation samples: {len(valid_dataset)}")
-print(f"Validate every epoch. Early stopping patience: {PATIENCE_LIMIT} epochs")
+print(f"Train samples: {len(train_dataset)}")
 
 DISABLE_PROGRESS = os.environ.get('DISABLE_TQDM', '0') == '1'
 for epoch in range(cfg.epochs):
@@ -260,13 +236,8 @@ for epoch in range(cfg.epochs):
         "epoch": (epoch + 1)
     }
     
-    # Val every epoch
-    avg_val_loss = None
     test_image_auc = None
     test_pixel_auc = None
-    print(f'\nValidate at epoch {epoch + 1}...')
-    avg_val_loss = calculate_val_loss(cfg, model, device, valid_loader, criterion, epoch + 1)
-    metrics["val/loss"] = avg_val_loss
     # Save current model mỗi epoch
     current_model_path = os.path.join(cfg.chechpoint_dir, 'model.pth')
     checkpoint = {
@@ -274,7 +245,6 @@ for epoch in range(cfg.epochs):
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'train_loss': avg_train_loss,
-            'val_loss': avg_val_loss,
             'test_image_auc': test_image_auc if test_image_auc is not None else 0.0,
             'test_pixel_auc': test_pixel_auc if test_pixel_auc is not None else 0.0,
             'config': cfg.__dict__
@@ -302,36 +272,6 @@ for epoch in range(cfg.epochs):
             if test_pixel_auc > best_pixel_auc:
                 best_pixel_auc = test_pixel_auc
                 metrics["test/best_pixel_auc"] = best_pixel_auc
-        
-    # Early stopping and model saving based on validation loss
-    if avg_val_loss < best_val_loss:
-        best_val_loss = avg_val_loss
-        patience_counter = 0
-        
-        # Save checkpoint
-        checkpoint = {
-            'epoch': epoch + 1,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'train_loss': avg_train_loss,
-            'val_loss': avg_val_loss,
-            'test_image_auc': test_image_auc if test_image_auc is not None else 0.0,
-            'test_pixel_auc': test_pixel_auc if test_pixel_auc is not None else 0.0,
-            'best_val_loss': best_val_loss,
-            'best_image_auc': best_image_auc,
-            'best_pixel_auc': best_pixel_auc,
-            'config': cfg.__dict__
-        }
-        # Save best model
-        best_model_path = os.path.join(cfg.chechpoint_dir, 'best_model.pth')
-        torch.save(checkpoint, best_model_path)  # Dùng lại checkpoint từ trên
-        
-        print(f'New best model saved: {best_model_path}')
-    else:
-        patience_counter += 1
-        if patience_counter >= PATIENCE_LIMIT:
-            print(f'Early stopping at epoch {epoch+1} (after {patience_counter} tests without improvement)')
-            break
     
     # Log to WandB
     if wandb_run:
@@ -339,13 +279,24 @@ for epoch in range(cfg.epochs):
     
     # Enhanced printing
     print(f'Epoch {epoch+1}/{cfg.epochs}: Train Loss: {avg_train_loss:.6f}', end='')
-    if avg_val_loss is not None:
-        print(f', Val Loss: {avg_val_loss:.6f}', end='')
     if test_image_auc is not None:
         print(f', Image AUC: {test_image_auc:.4f}', end='')
     if test_pixel_auc is not None:
         print(f', Pixel AUC: {test_pixel_auc:.4f}', end='')
     print()
+
+final_model_path = os.path.join(cfg.chechpoint_dir, 'best_model.pth')
+final_checkpoint = {
+    'epoch': epoch + 1,
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': optimizer.state_dict(),
+    'train_loss': avg_train_loss,
+    'test_image_auc': best_image_auc,
+    'test_pixel_auc': best_pixel_auc,
+    'config': cfg.__dict__
+}
+torch.save(final_checkpoint, final_model_path)
+print(f'Final model saved as best_model.pth: {final_model_path}')
 
 # Enhanced training summary
 print("\n" + "="*60)
@@ -356,21 +307,17 @@ print(f"Loss function: {cfg.loss}")
 print(f"Patch size: {cfg.patch_size}")
 print(f"Z dimension: {cfg.z_dim}")
 print(f"Total epochs: {epoch + 1}")
-print(f"Best validation loss: {best_val_loss:.6f}")
 print(f"Best image AUC: {best_image_auc:.4f}")
 print(f"Best pixel AUC: {best_pixel_auc:.4f}")
-print(f"Early stopped: {'Yes' if patience_counter >= PATIENCE_LIMIT else 'No'}")
 print(f"Models saved:")
-print(f"  - Best model: {os.path.join(cfg.chechpoint_dir, 'best_model.pth')}")
+print(f"  - Final model: {os.path.join(cfg.chechpoint_dir, 'model.pth')}")
 print(f"Results saved to: {cfg.chechpoint_dir}")
 
 # Enhanced WandB summary
 if wandb_run:
-    wandb_run.summary["best_val_loss"] = best_val_loss
     wandb_run.summary["best_image_auc"] = best_image_auc
     wandb_run.summary["best_pixel_auc"] = best_pixel_auc
     wandb_run.summary["final_epoch"] = epoch + 1
-    wandb_run.summary["early_stopped"] = patience_counter >= PATIENCE_LIMIT
     
     # if final_image_auc is not None:
     #     wandb_run.summary["final_image_auc"] = final_image_auc

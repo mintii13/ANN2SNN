@@ -27,7 +27,7 @@ class Options():
         self.parser.add_argument('--z_dim', type=int, default=100, help='dimension of the latent space vector')
         self.parser.add_argument('--flc', type=int, default=32, help='number of the first hidden layer channels')
 
-        self.parser.add_argument('--epochs', type=int, default=200, help='maximum training epochs')
+        self.parser.add_argument('--epochs', type=int, default=500, help='maximum training epochs')
         self.parser.add_argument('--batch_size', type=int, default=128)
         self.parser.add_argument('--loss', type=str, default='ssim_loss', help='loss type in [ssim_loss, ssim_l1_loss, l2_loss]')
         self.parser.add_argument('--weight', type=int, default=1, help='weight of the l1_loss item if using ssim_l1_loss')
@@ -43,7 +43,7 @@ class Options():
         self.parser.add_argument('--bg_mask', type=str, default=None, help='background mask, B means black, W means white')
 
     def parse(self):
-        DATASET_PATH = 'D:\FPTU-sourse\Term6\SNN\ANN2SNN\ICIIT\ANN2SNN\data\MVTec-AD\mvtec_anomaly_detection'
+        DATASET_PATH = '/home/minhtringuyen/ANN2SNN/mvtec_anomaly_detection'
         self.opt = self.parser.parse_args()
 
         if not self.opt.train_data_dir:
