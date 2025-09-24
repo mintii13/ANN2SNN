@@ -41,7 +41,7 @@ pip install -r requirements.txt
 
 2. Organize your project structure as follows:
 ```
-your_project_root/
+ANN2SNN/
 ├── train.py
 ├── test.py 
 ├── conversion_test.py
