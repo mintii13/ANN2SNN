@@ -56,6 +56,7 @@ your_project_root/
 │   │   ├── test/broken_large/
 │   │   ├── test/broken_small/
 │   │   └── test/contamination/
+│   │   └── ground_truth/
 │   ├── leather/
 │   │   ├── train/good/
 │   │   ├── test/good/
@@ -64,22 +65,17 @@ your_project_root/
 │   │   ├── test/fold/
 │   │   ├── test/glue/
 │   │   └── test/poke/
+│   │   └── ground_truth/
 │   └── ... (other 13 categories)
-├── ground_truth/             # Optional: for pixel-level evaluation
-│   ├── bottle/
-│   ├── leather/
-│   └── ...
 └── results/                  # Will be created automatically
     ├── bottle/
     │   └── chechpoints/
     │       └── ssim_loss/
-    │           ├── model.pth
-    │           └── best_model.pth
+    │           └── model.pth
     ├── leather/
     │   └── chechpoints/
     │       └── ssim_loss/
-    │           ├── model.pth
-    │           └── best_model.pth
+    │           └── model.pth
     └── ...
 ```
 
@@ -93,150 +89,171 @@ DATASET_PATH = './mvtec_anomaly_detection'  # Relative to your script location
 Download pre-trained ANN models from: https://drive.google.com/drive/folders/1JGw8gxNQ-6AZzRCxhrxRCfTBRY-q7QED?usp=sharing
 
 Extract and organize checkpoints as shown in the structure above. Each category should have:
-- `model.pth`: Latest trained model
-- `best_model.pth`: Best performing model (optional)
-
-**Note**: The checkpoint folder is named `chechpoints` (with typo) to match the original code structure./datasets/mvtec-ad/
-
-3. Set the `DATASET_PATH` in [options.py](options.py#L46):
-```python
-DATASET_PATH = 'your_project_root/mvtec_anomaly_detection'
-```
-
-### Pre-trained ANN Checkpoints
-
-Download pre-trained ANN models from: https://drive.google.com/drive/folders/1JGw8gxNQ-6AZzRCxhrxRCfTBRY-q7QED?usp=sharing
-
-Organize checkpoints in your project:
-```
-your_project_root/
-├── results/
-│   ├── bottle/chechpoints/ssim_loss/model.pth
-│   ├── leather/chechpoints/ssim_loss/model.pth
-│   ├── wood/chechpoints/ssim_loss/model.pth
-│   ├── tile/chechpoints/ssim_loss/model.pth
-│   ├── hazelnut/chechpoints/ssim_loss/model.pth
-│   └── ... (other categories)
-```
+- `model.pth`: ANN trained model
 
 **Note**: The checkpoint folder is named `chechpoints` (with typo) to match the original code.
 
 ## Usage
 
-### Step 1: Train ANN Baseline
+#### Object Categories (patch_size=256, z_dim=500)
 
-First train the ANN autoencoder using SSIM loss:
-
-**Texture Categories (patch_size=128, z_dim=100):**
+**Bottle**
 ```bash
-# Leather
-python train.py --name leather --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug
-
-# Wood  
-python train.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug --rotate_angle_vari 15
-
-# Tile
-python train.py --name tile --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug
-
-# Carpet
-python train.py --name carpet --loss ssim_loss --im_resize 512 --patch_size 128 --z_dim 100 --do_aug --rotate_angle_vari 10
-
-# Grid (grayscale)
-python train.py --name grid --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --grayscale --do_aug
-```
-
-**Object Categories (patch_size=256, z_dim=500):**
-```bash
-# Bottle
+# Training
 python train.py --name bottle --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0.
+# Testing ANN
+python test.py --name bottle --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask W
+# SNN Conversion
+python conversion_test.py --name bottle --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
+```
 
-# Hazelnut
+**Cable**
+```bash
+# Training
+python train.py --name cable --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_horizonal_flip 0. --p_vertical_flip 0.
+# Testing ANN
+python test.py --name cable --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
+# SNN Conversion
+python conversion_test.py --name cable --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
+```
+
+**Capsule**
+```bash
+# Training
+python train.py --name capsule --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_horizonal_flip 0. --p_vertical_flip 0.
+# Testing ANN
+python test.py --name capsule --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask W
+# SNN Conversion
+python conversion_test.py --name capsule --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
+```
+
+**Hazelnut**
+```bash
+# Training
 python train.py --name hazelnut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate_crop 0.
+# Testing ANN
+python test.py --name hazelnut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask B 
+# SNN Conversion
+python conversion_test.py --name hazelnut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
+```
 
-# Toothbrush
+**Metal Nut**
+```bash
+# Training
+python train.py --name metal_nut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate_crop 0. --p_horizonal_flip 0. --p_vertical_flip 0.
+# Testing ANN
+python test.py --name metal_nut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask B 
+# SNN Conversion
+python conversion_test.py --name metal_nut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
+```
+
+**Pill**
+```bash
+# Training
+python train.py --name pill --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_horizonal_flip 0. --p_vertical_flip 0.
+# Testing ANN
+python test.py --name pill --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask B
+# SNN Conversion
+python conversion_test.py --name pill --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
+```
+
+**Screw (Grayscale)**
+```bash
+# Training
+python train.py --name screw --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale --do_aug --p_rotate 0.
+# Testing ANN
+python test.py --name screw --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale --bg_mask W
+# SNN Conversion
+python conversion_test.py --name screw --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale
+```
+
+**Toothbrush**
+```bash
+# Training
 python train.py --name toothbrush --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_vertical_flip 0.
+# Testing ANN
+python test.py --name toothbrush --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
+# SNN Conversion
+python conversion_test.py --name toothbrush --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
 ```
 
-### Step 2: Test ANN Baseline
-
+**Transistor**
 ```bash
-# Test ANN performance
+# Training
+python train.py --name transistor --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_vertical_flip 0.
+# Testing ANN
+python test.py --name transistor --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 
+# SNN Conversion
+python conversion_test.py --name transistor --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
+```
+
+**Zipper (Grayscale)**
+```bash
+# Training
+python train.py --name zipper --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale --do_aug --p_rotate 0.
+# Testing ANN
+python test.py --name zipper --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale 
+# SNN Conversion
+python conversion_test.py --name zipper --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale
+```
+
+#### Texture Categories (patch_size=128, z_dim=100)
+
+**Carpet**
+```bash
+# Training
+python train.py --name carpet --loss ssim_loss --im_resize 512 --patch_size 128 --z_dim 100 --do_aug --rotate_angle_vari 10
+# Testing ANN
+python test.py --name carpet --loss ssim_loss --im_resize 512 --patch_size 128 --z_dim 100
+# SNN Conversion
+python conversion_test.py --name carpet --loss ssim_loss --im_resize 512 --patch_size 128 --z_dim 100
+```
+
+**Grid (Grayscale)**
+```bash
+# Training
+python train.py --name grid --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --grayscale --do_aug 
+# Testing ANN
+python test.py --name grid --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --grayscale
+# SNN Conversion
+python conversion_test.py --name grid --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --grayscale
+```
+
+**Leather**
+```bash
+# Training
+python train.py --name leather --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug
+# Testing ANN
 python test.py --name leather --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
-```
-
-### Step 3: Convert to SNN and Evaluate
-
-```bash
-# Convert ANN to SNN and evaluate across different timesteps
+# SNN Conversion
 python conversion_test.py --name leather --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
 ```
 
-This will:
-- Convert the trained ANN to SNN using SpikingJelly
-- Evaluate performance across timesteps T ∈ {1,10,20,...,100}
-- Generate energy consumption analysis
-- Save reconstruction visualizations
-
-## Key Features
-
-### Firing Rate-based Reconstruction
-
-Our core contribution addresses the spike-to-continuous conversion challenge:
-
-```python
-# Temporal spike accumulation
-y_rate = (1/T) * sum(spikes[t] for t in range(T))
-
-# Sigmoid mapping to pixel intensities  
-reconstruction = sigmoid(y_rate)
+**Tile**
+```bash
+# Training
+python train.py --name tile --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug
+# Testing ANN
+python test.py --name tile --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
+# SNN Conversion
+python conversion_test.py --name tile --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
 ```
 
-### Energy Efficiency Analysis
-
-The framework automatically calculates energy consumption using neuromorphic hardware baselines:
-- **SNN**: 77 fJ per synaptic operation (SOP)
-- **ANN**: 12.5 pJ per floating-point operation (FLOP)
-
-### Adaptive Timestep Selection
-
-- **Standard**: T=100 timesteps for most categories
-- **Complex objects**: T=300 for fine-grained details (e.g., Toothbrush)
-- **Trade-off**: Higher T improves accuracy but increases latency
-
-## Results
-
-Our approach achieves competitive anomaly detection performance while providing substantial energy savings:
-
-| Category | ANN (Image/Pixel) | ANN2SNN (Image/Pixel) | Energy Reduction |
-|----------|-------------------|----------------------|------------------|
-| Wood     | 0.975/0.714      | 0.980/0.714          | 7,240×           |
-| Leather  | 0.877/0.870      | 0.874/0.881          | 10,588×          |
-| Bottle   | 0.918/0.812      | 0.925/0.738          | 12,376×          |
-
-## File Structure
-
-```
-ANN2SNN/
-├── train.py              # ANN training script
-├── test.py               # ANN testing and evaluation
-├── conversion_test.py    # ANN-to-SNN conversion and SNN evaluation
-├── network.py            # Autoencoder architecture
-├── options.py            # Configuration parameters
-├── utils.py              # Utility functions
-├── ssim.py               # SSIM loss implementation
-└── debug_snn_conversion.py # Debugging tools
+**Wood**
+```bash
+# Training
+python train.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug --rotate_angle_vari 15
+# Testing ANN
+python test.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 
+# SNN Conversion
+python conversion_test.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
 ```
 
-## Debugging and Analysis
+### Batch Training (Optional)
 
-Use the debugging tools to analyze conversion quality:
+For training multiple categories automatically:
 
 ```bash
-python debug_snn_conversion.py --name leather
+# Train all categories with optimal configurations
+python train_all.py --epochs 200
 ```
-
-This provides:
-- SNN conversion verification
-- Temporal behavior analysis
-- Voltage scaler diagnostics
-- Performance comparison insights
