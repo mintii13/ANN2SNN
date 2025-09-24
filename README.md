@@ -42,13 +42,13 @@ pip install -r requirements.txt
 2. Organize your project structure as follows:
 ```
 ANN2SNN/
-├── train.py
-├── test.py 
-├── conversion_test.py
-├── options.py
-├── network.py
-├── utils.py
-├── ssim.py
+├── train.py                # ANN training script
+├── test.py                 # ANN testing and evaluation
+├── conversion_test.py      # ANN-to-SNN conversion and SNN evaluation
+├── options.py              # Configuration parameters
+├── network.py              # Autoencoder architecture
+├── utils.py                # Utility functions
+├── ssim.py                 # SSIM loss implementation
 ├── mvtec_anomaly_detection/
 │   ├── bottle/
 │   │   ├── train/good/
