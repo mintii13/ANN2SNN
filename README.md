@@ -1,231 +1,242 @@
-# AutoEncoder with SSIM loss
+# ANN2SNN: Firing Rate-based SNN Conversion for Anomaly Detection
 
-This is a third party implementation of the paper **Improving Unsupervised Defect Segmentation by Applying Structural Similarity to Autoencoders**.<br>
+This repository implements a novel ANN-to-SNN conversion approach for energy-efficient image anomaly detection using reconstruction methods. Our method introduces a firing rate-based reconstruction head that enables high-quality continuous value generation from spiking neural networks.
 
+## Overview
 
-![avatar](./image/bent_000_origin.png) ![avatar](./image/bent_000_rec.png) ![avatar](./image/bent_000_visual.png)
+Traditional SNN conversion methods struggle with reconstruction tasks due to the mismatch between discrete spikes and continuous outputs required for image reconstruction. Our approach addresses this challenge through:
 
+- **Firing Rate-based Reconstruction**: Novel temporal spike accumulation mechanism for continuous value approximation
+- **Energy Efficiency**: 3,900-10,600× energy reduction compared to ANN baselines
+- **Direct Conversion**: No retraining required - works with pre-trained ANN models
+- **Competitive Performance**: Superior to specialized SNN methods (FSVAE, ESVAE) on 10/15 MVTec categories
 
-## Requirement
-`tensorflow==2.2.0` <br>
-`skimage` <br>
+## Requirements
 
-## Datasets
-MVTec AD datasets https://www.mvtec.com/company/research/datasets/mvtec-ad/
-
-## Code examples
-
-### Step 1. Set the *DATASET_PATH* variable.
-
-Set the [DATASET_PATH](options.py#L046) to the root path of the downloaded MVTec AD dataset.
-
-### Step 2. Train **SSIM-AE** and Test.
-
-- **bottle** object
-```bash
-python train.py --name bottle --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0.
-python test.py --name bottle --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask W
 ```
-- **cable** object
-```bash
-python train.py --name cable --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_horizonal_flip 0. --p_vertical_flip 0.
-python test.py --name cable --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
-``` 
-- **capsule** object
-```bash
-python train.py --name capsule --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_horizonal_flip 0. --p_vertical_flip 0.
-python test.py --name capsule --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask W
+torch>=1.12.0
+torchvision>=0.13.0
+spikingjelly>=0.0.0.0.14
+scikit-image>=0.19.0
+scikit-learn>=1.0.0
+opencv-python>=4.5.0
+numpy>=1.21.0
+matplotlib>=3.5.0
+tqdm
 ```
-- **carpet** texture
+
+## Installation
+
 ```bash
-python train.py --name carpet --loss ssim_loss --im_resize 512 --patch_size 128 --z_dim 100 --do_aug --rotate_angle_vari 10
-python test.py --name carpet --loss ssim_loss --im_resize 512 --patch_size 128 --z_dim 100
+git clone https://github.com/mintii13/ANN2SNN.git
+cd ANN2SNN
+pip install -r requirements.txt
 ```
-- **grid** texture
-```bash
-python train.py --name grid --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --grayscale --do_aug 
-python test.py --name grid --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --grayscale
+
+## Dataset and Checkpoint Setup
+
+### Dataset Structure
+
+1. Download MVTec AD dataset from: https://www.mvtec.com/company/research/datasets/mvtec-ad/
+
+2. Organize your project structure as follows:
 ```
-- **hazelnut** object
-```bash
-python train.py --name hazelnut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate_crop 0.
-python test.py --name hazelnut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask B 
+your_project_root/
+├── train.py
+├── test.py 
+├── conversion_test.py
+├── options.py
+├── network.py
+├── utils.py
+├── ssim.py
+├── mvtec_anomaly_detection/
+│   ├── bottle/
+│   │   ├── train/good/
+│   │   ├── test/good/
+│   │   ├── test/broken_large/
+│   │   ├── test/broken_small/
+│   │   └── test/contamination/
+│   ├── leather/
+│   │   ├── train/good/
+│   │   ├── test/good/
+│   │   ├── test/color/
+│   │   ├── test/cut/
+│   │   ├── test/fold/
+│   │   ├── test/glue/
+│   │   └── test/poke/
+│   └── ... (other 13 categories)
+├── ground_truth/             # Optional: for pixel-level evaluation
+│   ├── bottle/
+│   ├── leather/
+│   └── ...
+└── results/                  # Will be created automatically
+    ├── bottle/
+    │   └── chechpoints/
+    │       └── ssim_loss/
+    │           ├── model.pth
+    │           └── best_model.pth
+    ├── leather/
+    │   └── chechpoints/
+    │       └── ssim_loss/
+    │           ├── model.pth
+    │           └── best_model.pth
+    └── ...
 ```
-- **leather** texture
+
+3. The `DATASET_PATH` in [options.py](options.py#L46) should point to the mvtec_anomaly_detection folder:
+```python
+DATASET_PATH = './mvtec_anomaly_detection'  # Relative to your script location
+```
+
+### Pre-trained ANN Checkpoints
+
+Download pre-trained ANN models from: https://drive.google.com/drive/folders/1JGw8gxNQ-6AZzRCxhrxRCfTBRY-q7QED?usp=sharing
+
+Extract and organize checkpoints as shown in the structure above. Each category should have:
+- `model.pth`: Latest trained model
+- `best_model.pth`: Best performing model (optional)
+
+**Note**: The checkpoint folder is named `chechpoints` (with typo) to match the original code structure./datasets/mvtec-ad/
+
+3. Set the `DATASET_PATH` in [options.py](options.py#L46):
+```python
+DATASET_PATH = 'your_project_root/mvtec_anomaly_detection'
+```
+
+### Pre-trained ANN Checkpoints
+
+Download pre-trained ANN models from: https://drive.google.com/drive/folders/1JGw8gxNQ-6AZzRCxhrxRCfTBRY-q7QED?usp=sharing
+
+Organize checkpoints in your project:
+```
+your_project_root/
+├── results/
+│   ├── bottle/chechpoints/ssim_loss/model.pth
+│   ├── leather/chechpoints/ssim_loss/model.pth
+│   ├── wood/chechpoints/ssim_loss/model.pth
+│   ├── tile/chechpoints/ssim_loss/model.pth
+│   ├── hazelnut/chechpoints/ssim_loss/model.pth
+│   └── ... (other categories)
+```
+
+**Note**: The checkpoint folder is named `chechpoints` (with typo) to match the original code.
+
+## Usage
+
+### Step 1: Train ANN Baseline
+
+First train the ANN autoencoder using SSIM loss:
+
+**Texture Categories (patch_size=128, z_dim=100):**
 ```bash
+# Leather
 python train.py --name leather --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug
+
+# Wood  
+python train.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug --rotate_angle_vari 15
+
+# Tile
+python train.py --name tile --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug
+
+# Carpet
+python train.py --name carpet --loss ssim_loss --im_resize 512 --patch_size 128 --z_dim 100 --do_aug --rotate_angle_vari 10
+
+# Grid (grayscale)
+python train.py --name grid --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --grayscale --do_aug
+```
+
+**Object Categories (patch_size=256, z_dim=500):**
+```bash
+# Bottle
+python train.py --name bottle --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0.
+
+# Hazelnut
+python train.py --name hazelnut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate_crop 0.
+
+# Toothbrush
+python train.py --name toothbrush --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_vertical_flip 0.
+```
+
+### Step 2: Test ANN Baseline
+
+```bash
+# Test ANN performance
 python test.py --name leather --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
 ```
-- **metal_nut** object
+
+### Step 3: Convert to SNN and Evaluate
+
 ```bash
-python train.py --name metal_nut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate_crop 0. --p_horizonal_flip 0. --p_vertical_flip 0.
-python test.py --name metal_nut --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask B 
-```
-- **pill** object
-```bash
-python train.py --name pill --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_horizonal_flip 0. --p_vertical_flip 0.
-python test.py --name pill --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --bg_mask B
-```
-- **screw** object
-```bash
-python train.py --name screw --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale --do_aug --p_rotate 0.
-python test.py --name screw --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale --bg_mask W
-```
-- **tile** texture
-```bash
-python train.py --name tile --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug
-python test.py --name tile --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
-```
-- **toothbrush** object
-```bash
-python train.py --name toothbrush --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_vertical_flip 0.
-python test.py --name toothbrush --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500
-```
-- **transistor** object
-```bash
-python train.py --name transistor --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --do_aug --p_rotate 0. --p_vertical_flip 0.
-python test.py --name transistor --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 
-```
-- **wood** texture
-```bash
-python train.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 --do_aug --rotate_angle_vari 15
-python test.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100 
-```
-- **zipper** object
-```bash
-python train.py --name zipper --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale --do_aug --p_rotate 0.
-python test.py --name zipper --loss ssim_loss --im_resize 266 --patch_size 256 --z_dim 500 --grayscale 
+# Convert ANN to SNN and evaluate across different timesteps
+python conversion_test.py --name leather --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
 ```
 
-## Overview of Results
+This will:
+- Convert the trained ANN to SNN using SpikingJelly
+- Evaluate performance across timesteps T ∈ {1,10,20,...,100}
+- Generate energy consumption analysis
+- Save reconstruction visualizations
 
-**Classification**  
-During test, I simply classify a test image as defect if there is any anomalous response on the residual map. It is strict for anomaly-free images, resulting in relatively lower accuracy in the `ok` column shown as below.<br>
-Please note that the **threshold** makes a big difference to the outcome, which should be carefully selected.
-<table>
-<tbody>
-<tr class="odd">
-<td style="text-align: left;"></td>
-<td style="text-align: left;">ok</td>
-<td style="text-align: left;">nok</td>
-<td style="text-align: left;">average</td>
-</tr>
-<tr class="even">
-<td style="text-align: center;">bottle <span class="citation" data-cites="bottle"></span></td>
-<td style="text-align: left;">90.0</td>
-<td style="text-align: left;">98.4</td>
-<td style="text-align: left;">96.4</td>
-</tr>
-<tr class="odd">
-<td style="text-align: center;">cable <span class="citation" data-cites="cable"></span></td>
-<td style="text-align: left;">0.0</td>
-<td style="text-align: left;">45.7</td>
-<td style="text-align: left;">28.0</td>
-</tr>
-<tr class="even">
-<td style="text-align: center;">capsule <span class="citation" data-cites="capsule"></span></td>
-<td style="text-align: left;">34.8</td>
-<td style="text-align: left;">89.6</td>
-<td style="text-align: left;">78.0</td>
-</tr>
-<tr class="odd">
-<td style="text-align: center;">carpet <span class="citation" data-cites="carpet"></span></td>
-<td style="text-align: left;">42.9</td>
-<td style="text-align: left;">98.9</td>
-<td style="text-align: left;">88.9</td>
-</tr>
-<tr class="even">
-<td style="text-align: center;">grid <span class="citation" data-cites="grid"></span></td>
-<td style="text-align: left;">100</td>
-<td style="text-align: left;">94.7</td>
-<td style="text-align: left;">96.2</td>
-</tr>
-<tr class="odd">
-<td style="text-align: center;">hazelnut <span class="citation" data-cites="hazelnut"></span></td>
-<td style="text-align: left;">55.0</td>
-<td style="text-align: left;">98.6</td>
-<td style="text-align: left;">82.7</td>
-</tr>
-<tr class="even">
-<td style="text-align: center;">leather <span class="citation" data-cites="leather"></span></td>
-<td style="text-align: left;">71.9</td>
-<td style="text-align: left;">92.4</td>
-<td style="text-align: left;">87.1</td>
-</tr>
-<tr class="odd">
-<td style="text-align: center;">metal nut <span class="citation" data-cites="metal nut"></span></td>
-<td style="text-align: left;">22.7</td>
-<td style="text-align: left;">67.7</td>
-<td style="text-align: left;">59.1</td>
-</tr>
-<tr class="even">
-<td style="text-align: center;">pill <span class="citation" data-cites="pill"></span></td>
-<td style="text-align: left;">11.5</td>
-<td style="text-align: left;">75.9</td>
-<td style="text-align: left;">65.9</td>
-</tr>
-<tr class="odd">
-<td style="text-align: center;">screw <span class="citation" data-cites="screw"></span></td>
-<td style="text-align: left;">0.5</td>
-<td style="text-align: left;">90.0</td>
-<td style="text-align: left;">68.1</td>
-</tr>
-<tr class="even">
-<td style="text-align: center;">tile <span class="citation" data-cites="tile"></span></td>
-<td style="text-align: left;">100.0</td>
-<td style="text-align: left;">3.6</td>
-<td style="text-align: left;">30.8</td>
-</tr>
-<tr class="odd">
-<td style="text-align: center;">toothbrush <span class="citation" data-cites="toothbrush"></span></td>
-<td style="text-align: left;">83.3</td>
-<td style="text-align: left;">100</td>
-<td style="text-align: left;">95.2</td>
-</tr>
-<tr class="even">
-<td style="text-align: center;">transistor <span class="citation" data-cites="transistor"></span></td>
-<td style="text-align: left;">23.3</td>
-<td style="text-align: left;">97.5</td>
-<td style="text-align: left;">53.0</td>
-</tr>
-<tr class="odd">
-<td style="text-align: center;">wood <span class="citation" data-cites="wood"></span></td>
-<td style="text-align: left;">89.5</td>
-<td style="text-align: left;">76.7</td>
-<td style="text-align: left;">79.7</td>
-</tr>
-<tr class="even">
-<td style="text-align: center;">zipper <span class="citation" data-cites="zipper"></span></td>
-<td style="text-align: left;">68.8</td>
-<td style="text-align: left;">81.5</td>
-<td style="text-align: left;">78.8</td>
-</tr>
-</tbody>
-</table>
-*SSIM loss, 200 epochs, different threshold
+## Key Features
 
-## Discussion
-- **SSIM + L1 metrics**<br>
-Since SSIM is a measure of similarity only between grayscale images, it cannot handle color defect in some cases. So here I use SSIM + L1 distance for anomaly segmentation.
-- **VAE**<br>
-I have tried VAE, observing no performances improvements.
-- **InstanceNorm**<br>
-I have also tried adding the IN layer for accelerating convergence, but the droplet artifact appears in some cases. It is also mentioned and discussed in **StyleGAN-2** paper. 
+### Firing Rate-based Reconstruction
 
-## Supplementary materials
-My notes https://www.yuque.com/books/share/8c7613f7-7571-4bfa-865a-689de3763c59?#
-password `ixgg`
+Our core contribution addresses the spike-to-continuous conversion challenge:
 
-## References
-@inproceedings{inproceedings,
-author = {Bergmann, Paul and Löwe, Sindy and Fauser, Michael and Sattlegger, David and Steger, Carsten},
-year = {2019},
-month = {01},
-pages = {372-380},
-title = {Improving Unsupervised Defect Segmentation by Applying Structural Similarity to Autoencoders},
-doi = {10.5220/0007364503720380}
-}
+```python
+# Temporal spike accumulation
+y_rate = (1/T) * sum(spikes[t] for t in range(T))
 
-Paul Bergmann, Michael Fauser, David Sattlegger, Carsten Steger. MVTec AD - A Comprehensive Real-World Dataset for Unsupervised Anomaly Detection; in: IEEE Conference on Computer Vision and Pattern Recognition (CVPR), June 2019
+# Sigmoid mapping to pixel intensities  
+reconstruction = sigmoid(y_rate)
+```
 
+### Energy Efficiency Analysis
 
+The framework automatically calculates energy consumption using neuromorphic hardware baselines:
+- **SNN**: 77 fJ per synaptic operation (SOP)
+- **ANN**: 12.5 pJ per floating-point operation (FLOP)
+
+### Adaptive Timestep Selection
+
+- **Standard**: T=100 timesteps for most categories
+- **Complex objects**: T=300 for fine-grained details (e.g., Toothbrush)
+- **Trade-off**: Higher T improves accuracy but increases latency
+
+## Results
+
+Our approach achieves competitive anomaly detection performance while providing substantial energy savings:
+
+| Category | ANN (Image/Pixel) | ANN2SNN (Image/Pixel) | Energy Reduction |
+|----------|-------------------|----------------------|------------------|
+| Wood     | 0.975/0.714      | 0.980/0.714          | 7,240×           |
+| Leather  | 0.877/0.870      | 0.874/0.881          | 10,588×          |
+| Bottle   | 0.918/0.812      | 0.925/0.738          | 12,376×          |
+
+## File Structure
+
+```
+ANN2SNN/
+├── train.py              # ANN training script
+├── test.py               # ANN testing and evaluation
+├── conversion_test.py    # ANN-to-SNN conversion and SNN evaluation
+├── network.py            # Autoencoder architecture
+├── options.py            # Configuration parameters
+├── utils.py              # Utility functions
+├── ssim.py               # SSIM loss implementation
+└── debug_snn_conversion.py # Debugging tools
+```
+
+## Debugging and Analysis
+
+Use the debugging tools to analyze conversion quality:
+
+```bash
+python debug_snn_conversion.py --name leather
+```
+
+This provides:
+- SNN conversion verification
+- Temporal behavior analysis
+- Voltage scaler diagnostics
+- Performance comparison insights
