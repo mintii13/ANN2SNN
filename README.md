@@ -7,7 +7,7 @@ This repository implements a novel ANN-to-SNN conversion approach for energy-eff
 Traditional SNN conversion methods struggle with reconstruction tasks due to the mismatch between discrete spikes and continuous outputs required for image reconstruction. Our approach addresses this challenge through:
 
 - **Firing Rate-based Reconstruction**: Novel temporal spike accumulation mechanism for continuous value approximation
-- **Energy Efficiency**: 3,900-10,600× energy reduction compared to ANN baselines
+- **Energy Efficiency**: 7,200-27,100× energy reduction compared to ANN baselines
 - **Direct Conversion**: No retraining required - works with pre-trained ANN models
 - **Competitive Performance**: Superior to specialized SNN methods (FSVAE, ESVAE) on 10/15 MVTec categories
 
@@ -17,12 +17,12 @@ Traditional SNN conversion methods struggle with reconstruction tasks due to the
 
 The following table shows AUC performance across different time steps for SNN conversion compared to the original ANN baseline:
 
-| Class | Metric | ANN ReLU | Time step 1 | Time step 10 | Time step 20 | Time step 30 | Time step 40 | Time step 50 | Time step 60 | Time step 70 | Time step 80 | Time step 90 | Time step 100 |
+| Class | AUC | ANN ReLU | Time step 1 | Time step 10 | Time step 20 | Time step 30 | Time step 40 | Time step 50 | Time step 60 | Time step 70 | Time step 80 | Time step 90 | Time step 100 |
 |-------|--------|----------|-------------|--------------|--------------|--------------|--------------|--------------|--------------|--------------|--------------|--------------|---------------|
 | **wood** | image | 0.9754 | 0.9702 | 0.9737 | 0.9789 | 0.9781 | 0.9798 | 0.9816 | 0.9807 | 0.9798 | 0.9807 | 0.9798 | 0.9798 |
 | | pixel | 0.7140 | 0.7102 | 0.7118 | 0.7137 | 0.7136 | 0.7136 | 0.7138 | 0.7138 | 0.7137 | 0.7137 | 0.7138 | 0.7139 |
-| **tile** | image | 0.8315 | 0.8979 | 0.8712 | 0.8517 | 0.8431 | 0.8413 | 0.8398 | 0.8391 | 0.8369 | 0.8366 | 0.8344 | 0.8348 |
-| | pixel | 0.4326 | 0.4377 | 0.4337 | 0.4329 | 0.4326 | 0.4329 | 0.4325 | 0.4322 | 0.4324 | 0.4326 | 0.4327 | 0.4327 |
+| **tile** | image | 0.8315 | 0.8777 | 0.8615 | 0.8442 | 0.8434 | 0.8395 | 0.8355 | 0.8359 | 0.8377 | 0.8369 | 0.8366 | 0.8359 |
+| | pixel | 0.4326 | 0.4342 | 0.4323 | 0.4322 | 0.4323 | 0.4323 | 0.4325 | 0.4326 | 0.4324 | 0.4324 | 0.4323 | 0.4323 |
 | **leather** | image | 0.8767 | 0.9474 | 0.9474 | 0.9151 | 0.8736 | 0.8702 | 0.8658 | 0.8665 | 0.8672 | 0.8709 | 0.8706 | 0.8736 |
 | | pixel | 0.8701 | 0.9094 | 0.9094 | 0.8980 | 0.8808 | 0.8844 | 0.8831 | 0.8828 | 0.8826 | 0.8822 | 0.8816 | 0.8813 |
 | **grid** | image | 0.7318 | 0.7310 | 0.7318 | 0.7327 | 0.7327 | 0.7327 | 0.7327 | 0.7327 | 0.7327 | 0.7327 | 0.7327 | 0.7327 |
@@ -47,8 +47,8 @@ The following table shows AUC performance across different time steps for SNN co
 | | pixel | 0.8761 | 0.6467 | 0.7004 | 0.6609 | 0.6476 | 0.7886 | 0.8582 | 0.8836 | 0.8986 | 0.9070 | 0.9129 | 0.9156 |
 | **cable** | image | 0.6265 | 0.5287 | 0.5287 | 0.5013 | 0.4957 | 0.5371 | 0.5560 | 0.5836 | 0.5864 | 0.6091 | 0.6293 | 0.6419 |
 | | pixel | 0.7468 | 0.7190 | 0.7190 | 0.7222 | 0.7584 | 0.7407 | 0.7394 | 0.7439 | 0.7482 | 0.7509 | 0.7515 | 0.7529 |
-| **bottle** | image | 0.9183 | 0.5698 | 0.5698 | 0.2841 | 0.3944 | 0.4317 | 0.4675 | 0.5968 | 0.8302 | 0.8921 | 0.9206 | 0.9246 |
-| | pixel | 0.8121 | 0.4350 | 0.4350 | 0.4122 | 0.5339 | 0.6128 | 0.6545 | 0.6807 | 0.7006 | 0.7159 | 0.7286 | 0.7381 |
+| **bottle** | image | 0.9183 | 0.5698 | 0.5698 | 0.2841 | 0.3865 | 0.4183 | 0.4889 | 0.5984 | 0.8397 | 0.8889 | 0.9206 | 0.9238 |
+| | pixel | 0.8121 | 0.4350 | 0.4350 | 0.4121 | 0.5332 | 0.6126 | 0.6549 | 0.6814 | 0.7002 | 0.7157 | 0.7288 | 0.7380 |
 
 ### Key Observations
 
@@ -295,7 +295,7 @@ python test.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z
 python conversion_test.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
 ```
 
-### Batch Training (Optional)
+### ANN Batch Training (Optional)
 
 For training multiple categories automatically:
 
