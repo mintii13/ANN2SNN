@@ -7,7 +7,7 @@ This repository implements a novel ANN-to-SNN conversion approach for energy-eff
 Traditional SNN conversion methods struggle with reconstruction tasks due to the mismatch between discrete spikes and continuous outputs required for image reconstruction. Our approach addresses this challenge through:
 
 - **Firing Rate-based Reconstruction**: Novel temporal spike accumulation mechanism for continuous value approximation
-- **Energy Efficiency**: 3,900-10,600× energy reduction compared to ANN baselines
+- **Energy Efficiency**: 7,200-27,100× energy reduction compared to ANN baselines
 - **Direct Conversion**: No retraining required - works with pre-trained ANN models
 - **Competitive Performance**: Superior to specialized SNN methods (FSVAE, ESVAE) on 10/15 MVTec categories
 
@@ -295,7 +295,7 @@ python test.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z
 python conversion_test.py --name wood --loss ssim_loss --im_resize 256 --patch_size 128 --z_dim 100
 ```
 
-### Batch Training (Optional)
+### ANN Batch Training (Optional)
 
 For training multiple categories automatically:
 
