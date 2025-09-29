@@ -326,26 +326,26 @@ class EnergyAnalyzer:
         return ann_results, snn_results
 
     def print_energy_summary(self, ann_results, snn_results, cfg):
-        """Print energy comparison summary in mJ"""
+        """Print energy comparison summary in μJ (microjoules)"""
         print(f"\n" + "="*100)
         print(f"ENERGY CONSUMPTION SUMMARY - {cfg.name.upper()}")
-        print(f"ANN: FLOPs×12.5pJ | SNN: SOPs×77fJ")
+        print(f"ANN: FLOPs×12.5pJ | SNN: SOPs×77fJ | Energy in microjoules (μJ)")
         print(f"="*100)
         
-        print(f"{'Model':<8} | {'T':<3} | {'FLOPs':<12} | {'SOPs':<12} | {'Spikes':<10} | {'Rate':<6} | {'Energy(mJ)':<12} | {'Ratio':<10} | {'Saving%':<8}")
+        print(f"{'Model':<8} | {'T':<3} | {'FLOPs':<12} | {'SOPs':<12} | {'Spikes':<10} | {'Rate':<6} | {'Energy(μJ)':<12} | {'Ratio':<10} | {'Saving%':<8}")
         print("-" * 100)
         
-        # ANN row - convert nJ to mJ (divide by 1e6)
-        ann_energy_mj = ann_results['energy_per_image_nj'] / 1e6
-        print(f"{'ANN':<8} | {'-':<3} | {ann_results['total_flops']:<12,} | {'-':<12} | {'-':<10} | {'-':<6} | {ann_energy_mj:<12.6f} | {'1.000000':<10} | {'-':<8}")
+        # ANN row - convert nJ to μJ (divide by 1e3)
+        ann_energy_uj = ann_results['energy_per_image_nj'] / 1e3
+        print(f"{'ANN':<8} | {'-':<3} | {ann_results['total_flops']:<12,} | {'-':<12} | {'-':<10} | {'-':<6} | {ann_energy_uj:<12.4f} | {'1.000000':<10} | {'-':<8}")
         
-        # SNN rows - convert nJ to mJ (divide by 1e6)
+        # SNN rows - convert nJ to μJ (divide by 1e3)
         for T, snn_result in snn_results:
-            snn_energy_mj = snn_result['energy_per_image_nj'] / 1e6
+            snn_energy_uj = snn_result['energy_per_image_nj'] / 1e3
             energy_ratio = snn_result['energy_per_image_nj'] / ann_results['energy_per_image_nj']
             energy_saving = (1 - energy_ratio) * 100
             
-            print(f"{'SNN':<8} | {T:<3} | {'-':<12} | {snn_result['total_sops']:<12,} | {snn_result['total_spikes']:<10,} | {snn_result['spike_rate']:<6.3f} | {snn_energy_mj:<12.6f} | {energy_ratio:<10.6f} | {energy_saving:<8.1f}")
+            print(f"{'SNN':<8} | {T:<3} | {'-':<12} | {snn_result['total_sops']:<12,} | {snn_result['total_spikes']:<10,} | {snn_result['spike_rate']:<6.3f} | {snn_energy_uj:<12.4f} | {energy_ratio:<10.6f} | {energy_saving:<8.1f}")
         
  
 def load_model(cfg):
@@ -414,7 +414,7 @@ def test_energy_comparison():
     analyzer = EnergyAnalyzer()
     
     # Test with different timesteps
-    timesteps_to_test = [20, 40, 60, 80, 100]
+    timesteps_to_test = [1, 20, 40, 60, 80, 100, 300]
     
     ann_results, snn_results = analyzer.compare_models_energy(cfg, timesteps_to_test)
 
