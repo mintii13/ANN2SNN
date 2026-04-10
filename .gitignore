@@ -6,3 +6,4 @@ results/
 train_patches/
 *.log
 wandb*
+mvtec/
