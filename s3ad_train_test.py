@@ -1,7 +1,7 @@
 """
-s3ad_train_test.py — S3AD: SNN Spatial Scanning Anomaly Detection
+s3ad_train_test.py - S3AD: SNN Spatial Scanning Anomaly Detection
 ==================================================================
-Full spiking pipeline — no ANN at inference, neuromorphic deployable.
+Full spiking pipeline - no ANN at inference, neuromorphic deployable.
 
 Architecture:
   - SNN Encoder: ResNet-18 ANN2SNN (frozen after conversion)
@@ -36,7 +36,7 @@ except ImportError:
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 1 — Args
+# SECTION 1 - Args
 # ══════════════════════════════════════════════════════
 
 def parse_args():
@@ -83,6 +83,8 @@ def parse_args():
     p.add_argument('--loss',         type=str,   default='mse',
                    choices=['mse', 'cosine', 'mse+cosine'],
                    help='Scanner reconstruction loss')
+    p.add_argument('--train_encoder', action='store_true',
+                   help='If set, fine-tune SNN encoder along with scanner')
 
     # Paths
     p.add_argument('--save_dir',     type=str,   default='./s3ad_checkpoints',
@@ -104,7 +106,7 @@ def parse_args():
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 2 — Dataset
+# SECTION 2 - Dataset
 # ══════════════════════════════════════════════════════
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -177,7 +179,7 @@ def collate_train(batch):
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 3 — SNN Encoder (ANN2SNN ResNet-18, frozen)
+# SECTION 3 - SNN Encoder (ANN2SNN ResNet-18, frozen)
 # ══════════════════════════════════════════════════════
 
 class ResNetEncoder(nn.Module):
@@ -201,10 +203,10 @@ class ResNetEncoder(nn.Module):
         return f2, f3
 
 
-def build_snn_encoder(ann_encoder, calib_loader, device, mode='max'):
+def build_snn_encoder(ann_encoder, calib_loader, device, mode='max', trainable=False):
     """
     Convert ResNet-18 encoder to SNN via SpikingJelly ANN2SNN.
-    Returns frozen SNN encoder.
+    If trainable=True, the SNN encoder will be trainable.
     """
     ann_encoder.eval()
     m = mode if mode == 'max' else 0.99
@@ -215,11 +217,17 @@ def build_snn_encoder(ann_encoder, calib_loader, device, mode='max'):
         momentum=0.1
     )
     snn = converter(ann_encoder)
-    # Freeze — encoder is fixed, only scanner is trained
-    for param in snn.parameters():
-        param.requires_grad = False
-    snn.eval()
-    print("SNN encoder built and frozen.")
+    
+    # Chỉ freeze nếu không train
+    if not trainable:
+        for param in snn.parameters():
+            param.requires_grad = False
+        snn.eval()
+        print("SNN encoder built and FROZEN.")
+    else:
+        snn.train()
+        print("SNN encoder built and TRAINABLE.")
+    
     return snn
 
 
@@ -227,7 +235,7 @@ def snn_encode(snn_encoder, imgs, timesteps, device):
     """
     Forward pass through SNN encoder for T timesteps.
     Returns firing rate maps f2 [B,128,H2,W2], f3 [B,256,H3,W3].
-    These are spike-based features — no floating point activations.
+    These are spike-based features - no floating point activations.
     """
     imgs = imgs.to(device)
     functional.reset_net(snn_encoder)
@@ -241,13 +249,13 @@ def snn_encode(snn_encoder, imgs, timesteps, device):
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 4 — SNN Spatial Scanner (trained)
+# SECTION 4 - SNN Spatial Scanner (trained)
 # ══════════════════════════════════════════════════════
 
 class SNNSpatialScanner(nn.Module):
     """
     SNN module that processes spatial tokens sequentially.
-    Membrane state accumulates spatial context — not reset between tokens.
+    Membrane state accumulates spatial context - not reset between tokens.
     Reset only once per image sequence (before scanning starts).
     """
     def __init__(self, in_channels, hidden_channels=None):
@@ -269,7 +277,7 @@ class SNNSpatialScanner(nn.Module):
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 5 — Spatial Scan Functions
+# SECTION 5 - Spatial Scan Functions
 # ══════════════════════════════════════════════════════
 
 def raster_scan(H, W):
@@ -316,19 +324,19 @@ SCAN_FNS = {'raster': raster_scan, 'zigzag': zigzag_scan, 'hilbert': hilbert_sca
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 6 — Scan one feature map through scanner
+# SECTION 6 - Scan one feature map through scanner
 # ══════════════════════════════════════════════════════
 
 def scan_feature_map(feat, scanner, scan_dir):
     """
-    feat: [B, C, H, W] — SNN firing rate feature map
+    feat: [B, C, H, W] - SNN firing rate feature map
     scanner: SNNSpatialScanner
     scan_dir: one of 'raster', 'zigzag', 'hilbert'
 
     Returns:
-      spike_map: [B, H, W] — spike output per spatial position
-      vmem_map:  [B, H, W] — membrane potential per spatial position
-      recon_map: [B, C, H, W] — reconstructed feature map from spikes
+      spike_map: [B, H, W] - spike output per spatial position
+      vmem_map:  [B, H, W] - membrane potential per spatial position
+      recon_map: [B, C, H, W] - reconstructed feature map from spikes
                   (used for training loss)
     """
     B, C, H, W = feat.shape
@@ -350,7 +358,7 @@ def scan_feature_map(feat, scanner, scan_dir):
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 7 — Loss
+# SECTION 7 - Loss
 # ══════════════════════════════════════════════════════
 
 class ScannerLoss(nn.Module):
@@ -386,21 +394,28 @@ class ScannerLoss(nn.Module):
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 8 — Training
+# SECTION 8 - Training
 # ══════════════════════════════════════════════════════
 
 def train(args, snn_encoder, scanner_f2, scanner_f3,
           train_loader, device, wandb_run=None):
-    """
-    Train scanner_f2 and scanner_f3 on normal data.
-    Objective: scanner learns to reconstruct normal SNN features.
-    Normal → low reconstruction error.
-    Anomaly (at test time) → high reconstruction error = anomaly signal.
-    """
+    
     criterion = ScannerLoss(mode=args.loss)
-    optimizer = optim.Adam(
-        list(scanner_f2.parameters()) + list(scanner_f3.parameters()),
-        lr=args.lr, weight_decay=args.weight_decay)
+    
+    # Thu thập parameters cần train
+    trainable_params = list(scanner_f2.parameters()) + list(scanner_f3.parameters())
+    
+    # Nếu train encoder, thêm vào
+    if args.train_encoder:
+        trainable_params += list(snn_encoder.parameters())
+        # Dùng learning rate nhỏ hơn cho encoder
+        optimizer = optim.Adam([
+            {'params': scanner_f2.parameters(), 'lr': args.lr},
+            {'params': scanner_f3.parameters(), 'lr': args.lr},
+            {'params': snn_encoder.parameters(), 'lr': args.lr * 0.1},  # LR nhỏ hơn 10x
+        ], weight_decay=args.weight_decay)
+    else:
+        optimizer = optim.Adam(trainable_params, lr=args.lr, weight_decay=args.weight_decay)
 
     os.makedirs(args.save_dir, exist_ok=True)
     best_loss = float('inf')
@@ -485,7 +500,7 @@ def train(args, snn_encoder, scanner_f2, scanner_f3,
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 9 — Scoring
+# SECTION 9 - Scoring
 # ══════════════════════════════════════════════════════
 
 def score_image(args, snn_encoder, scanner_f2, scanner_f3,
@@ -566,7 +581,7 @@ def score_image(args, snn_encoder, scanner_f2, scanner_f3,
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 10 — Evaluation
+# SECTION 10 - Evaluation
 # ══════════════════════════════════════════════════════
 
 def evaluate(args, snn_encoder, scanner_f2, scanner_f3, test_ds, device):
@@ -603,7 +618,7 @@ def evaluate(args, snn_encoder, scanner_f2, scanner_f3, test_ds, device):
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 11 — Main
+# SECTION 11 - Main
 # ══════════════════════════════════════════════════════
 
 def main():
@@ -649,7 +664,8 @@ def main():
                                shuffle=False, num_workers=2,
                                collate_fn=collate_train)
     snn_encoder = build_snn_encoder(ann_encoder, calib_loader,
-                                     device, mode=args.snn_mode)
+                                 device, mode=args.snn_mode,
+                                 trainable=args.train_encoder)
 
     # ── Build Scanners ──
     print('\n[2/3] Building SNN spatial scanners...')
@@ -707,7 +723,7 @@ def main():
         # Save result
         out = os.path.join(args.result_dir, f'{args.name}_result.txt')
         with open(out, 'w') as f:
-            f.write(f'S3AD Result — {args.name}\n')
+            f.write(f'S3AD Result - {args.name}\n')
             f.write(f'Timesteps: {args.timesteps}\n')
             f.write(f'Scan directions: {args.scan_directions}\n')
             f.write(f'Loss: {args.loss}\n')
