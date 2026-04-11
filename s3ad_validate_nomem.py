@@ -272,14 +272,14 @@ def score_image(snn_encoder, img_tensor, normal_rate_f2, normal_rate_f3,
     # Combine f2 + f3
     score_spatial = (dev_f2 + dev_f3_up) / 2.0  # [H2, W2]
 
-    # Thêm membrane residual nếu có
-    if vfinal_f3 is not None:
-        v_score = vfinal_f3.pow(2).mean(0)  # [H3, W3]
-        v_score_up = F.interpolate(v_score.unsqueeze(0).unsqueeze(0),
-                                    size=(H2, W2), mode='bilinear',
-                                    align_corners=False).squeeze()
-        v_norm = v_score_up / (v_score_up.max() + 1e-8)
-        score_spatial = score_spatial * (1.0 + v_norm)
+    # # Thêm membrane residual nếu có
+    # if vfinal_f3 is not None:
+    #     v_score = vfinal_f3.pow(2).mean(0)  # [H3, W3]
+    #     v_score_up = F.interpolate(v_score.unsqueeze(0).unsqueeze(0),
+    #                                 size=(H2, W2), mode='bilinear',
+    #                                 align_corners=False).squeeze()
+    #     v_norm = v_score_up / (v_score_up.max() + 1e-8)
+    #     score_spatial = score_spatial * (1.0 + v_norm)
 
     # Upscale về IMG_SIZE
     score_map = F.interpolate(score_spatial.unsqueeze(0).unsqueeze(0).float(),
@@ -417,7 +417,7 @@ def parse_args():
                    help='Timestep values to sweep')
     p.add_argument('--calib_samples', type=int, default=100,
                    help='Number of normal samples for ANN2SNN calibration')
-    p.add_argument('--save_dir',  type=str, default='./s3ad_results',
+    p.add_argument('--save_dir',  type=str, default='./s3ad_results_nomem',
                    help='Where to save results')
     return p.parse_args()
 

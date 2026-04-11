@@ -7,3 +7,6 @@ train_patches/
 *.log
 wandb*
 mvtec/
+*.txt
+*.csv
+*.md

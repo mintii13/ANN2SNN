@@ -28,7 +28,7 @@ def parse_args():
     p.add_argument('--data_path', type=str,
                    default='/home/minhtringuyen/ANN2SNN/mvtec')
     p.add_argument('--timesteps', type=int, nargs='+', default=[4, 8, 16, 32])
-    p.add_argument('--save_dir',  type=str, default='./s3ad_results')
+    p.add_argument('--save_dir',  type=str, default='./s3ad_results_nomem')
     p.add_argument('--categories', type=str, nargs='+',
                    default=MVTEC_CATEGORIES,
                    help='Subset of categories to run')
@@ -309,7 +309,7 @@ def main():
         print(f"\n[{i+1}/{len(args.categories)}] {cat}")
         start = time.time()
         cmd = [
-            sys.executable, 's3ad_validate.py',
+            sys.executable, 's3ad_validate_nomem.py',
             '--name', cat,
             '--data_path', args.data_path,
             '--timesteps', *[str(t) for t in args.timesteps],

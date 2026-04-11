@@ -107,7 +107,7 @@ def build_snn_from_ann(ann_module, calib_loader, device):
     converter = ann2snn.Converter(
         dataloader=calib_loader,
         device=device,
-        mode='max',
+        mode=0.99,
         momentum=0.1
     )
     snn = converter(ann_module)
@@ -270,8 +270,8 @@ def score_image(snn_encoder, img_tensor, normal_rate_f2, normal_rate_f3,
                                align_corners=False).squeeze()
 
     # Combine f2 + f3
-    score_spatial = (dev_f2 + dev_f3_up) / 2.0  # [H2, W2]
-
+    # score_spatial = (dev_f2 + dev_f3_up) / 2.0  # [H2, W2]
+    score_spatial = dev_f3_up
     # Thêm membrane residual nếu có
     if vfinal_f3 is not None:
         v_score = vfinal_f3.pow(2).mean(0)  # [H3, W3]
@@ -417,7 +417,7 @@ def parse_args():
                    help='Timestep values to sweep')
     p.add_argument('--calib_samples', type=int, default=100,
                    help='Number of normal samples for ANN2SNN calibration')
-    p.add_argument('--save_dir',  type=str, default='./s3ad_results',
+    p.add_argument('--save_dir',  type=str, default='./s3ad_results_3',
                    help='Where to save results')
     return p.parse_args()
 
