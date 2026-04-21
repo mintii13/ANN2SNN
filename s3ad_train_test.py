@@ -4,7 +4,7 @@ s3ad_train_test.py - S3AD: SNN Spatial Scanning Anomaly Detection
 Full spiking pipeline - no ANN at inference, neuromorphic deployable.
 
 Architecture:
-  - SNN Encoder: ResNet-18 ANN2SNN (frozen after conversion)
+  - SNN Encoder: ResNet-18 ANN2SNN (configurable freezing)
   - SNN Scanner: SNNSpatialScanner trained on normal data (feature reconstruction loss)
   - Anomaly score: firing rate deviation + membrane residual across N scan directions
 
@@ -64,6 +64,24 @@ def parse_args():
     p.add_argument('--snn_mode',     type=str,   default='max',
                    choices=['max', '99percent'],
                    help='ANN2SNN calibration mode')
+    
+    # Encoder fine-tuning options
+    p.add_argument('--encoder_train', type=str, default='freeze',
+                   choices=['freeze', 'freeze_and_adapt', 'train3', 'train23', 'train2', 'train123', 'train_all'],
+                   help='Encoder training strategy:\n'
+                        '  freeze: freeze all encoder layers\n'
+                        '  freeze_and_adapt: add trainable adapter modules\n'
+                        '  train3: only train layer3\n'
+                        '  train23: train layer2 and layer3\n'
+                        '  train2: only train layer2\n'
+                        '  train123: train layer1, layer2, layer3\n'
+                        '  train_all: train all layers (stem + all layers)')
+    
+    p.add_argument('--encoder_lr_ratio', type=float, default=0.1,
+                   help='Learning rate ratio for encoder vs scanner (default: 0.1)')
+    
+    p.add_argument('--adapter_channels', type=int, default=64,
+                   help='Hidden channels for adapter modules (when encoder_train=freeze_and_adapt)')
 
     # SNN Scanner
     p.add_argument('--hidden_channels', type=int, default=None,
@@ -83,8 +101,6 @@ def parse_args():
     p.add_argument('--loss',         type=str,   default='mse',
                    choices=['mse', 'cosine', 'mse+cosine'],
                    help='Scanner reconstruction loss')
-    p.add_argument('--train_encoder', action='store_true',
-                   help='If set, fine-tune SNN encoder along with scanner')
 
     # Paths
     p.add_argument('--save_dir',     type=str,   default='./s3ad_checkpoints',
@@ -99,7 +115,7 @@ def parse_args():
                    help='Enable WandB logging')
     p.add_argument('--wandb_project',type=str,   default='S3AD',
                    help='WandB project name')
-    p.add_argument('--wandb_key',    type=str,   default=None,
+    p.add_argument('--wandb_key',    type=str,   default='0f2ca680372a916c31aab5ede7bbefab410fe503',
                    help='WandB API key (or set WANDB_API_KEY env var)')
 
     return p.parse_args()
@@ -179,13 +195,12 @@ def collate_train(batch):
 
 
 # ══════════════════════════════════════════════════════
-# SECTION 3 - SNN Encoder (ANN2SNN ResNet-18, frozen)
+# SECTION 3 - SNN Encoder (ANN2SNN ResNet-18)
 # ══════════════════════════════════════════════════════
 
 class ResNetEncoder(nn.Module):
     """
     ResNet-18 pretrained. Output: f2 [B,128,H/8,W/8], f3 [B,256,H/16,W/16].
-    BatchNorm bounds activations → ANN2SNN calibration stable (max ~6-8).
     """
     def __init__(self):
         super().__init__()
@@ -203,10 +218,60 @@ class ResNetEncoder(nn.Module):
         return f2, f3
 
 
-def build_snn_encoder(ann_encoder, calib_loader, device, mode='max', trainable=False):
+class SNNEncoderWithAdapter(nn.Module):
+    """
+    SNN Encoder with trainable adapter modules (for freeze_and_adapt mode).
+    """
+    def __init__(self, snn_encoder, adapter_channels=64):
+        super().__init__()
+        self.snn_encoder = snn_encoder
+        
+        # Trainable adapter modules
+        self.adapter_f2 = nn.Sequential(
+            nn.Conv2d(128, adapter_channels, 1),
+            nn.BatchNorm2d(adapter_channels),
+            nn.ReLU(),
+            nn.Conv2d(adapter_channels, 128, 1)
+        )
+        self.adapter_f3 = nn.Sequential(
+            nn.Conv2d(256, adapter_channels, 1),
+            nn.BatchNorm2d(adapter_channels),
+            nn.ReLU(),
+            nn.Conv2d(adapter_channels, 256, 1)
+        )
+        
+        # Freeze original encoder
+        for param in self.snn_encoder.parameters():
+            param.requires_grad = False
+        
+        print(f"  Added adapters with {adapter_channels} channels")
+    
+    def forward(self, x):
+        f2, f3 = self.snn_encoder(x)
+        f2 = self.adapter_f2(f2) + f2  # Residual connection
+        f3 = self.adapter_f3(f3) + f3
+        return f2, f3
+    
+    def train(self, mode=True):
+        super().train(mode)
+        self.snn_encoder.eval()  # Keep original encoder in eval mode
+        return self
+
+
+def build_snn_encoder(ann_encoder, calib_loader, device, mode='max', 
+                      encoder_train='freeze', adapter_channels=64):
     """
     Convert ResNet-18 encoder to SNN via SpikingJelly ANN2SNN.
-    If trainable=True, the SNN encoder will be trainable.
+    
+    Args:
+        encoder_train: Strategy for training encoder
+            - 'freeze': freeze all layers
+            - 'freeze_and_adapt': add trainable adapters
+            - 'train3': only train layer3
+            - 'train23': train layer2 and layer3
+            - 'train2': only train layer2
+            - 'train123': train layer1, layer2, layer3
+            - 'train_all': train all layers (stem + layer1-3)
     """
     ann_encoder.eval()
     m = mode if mode == 'max' else 0.99
@@ -218,15 +283,57 @@ def build_snn_encoder(ann_encoder, calib_loader, device, mode='max', trainable=F
     )
     snn = converter(ann_encoder)
     
-    # Chỉ freeze nếu không train
-    if not trainable:
-        for param in snn.parameters():
-            param.requires_grad = False
+    # Define which layers to train based on strategy
+    if encoder_train == 'freeze':
+        trainable_patterns = []
         snn.eval()
-        print("SNN encoder built and FROZEN.")
-    else:
+        
+    elif encoder_train == 'freeze_and_adapt':
+        # Return wrapped model with adapters
+        snn_with_adapter = SNNEncoderWithAdapter(snn, adapter_channels).to(device)
+        print("SNN encoder built with FREEZE_AND_ADAPT strategy.")
+        print(f"  Trainable parameters: {sum(p.numel() for p in snn_with_adapter.parameters() if p.requires_grad):,}")
+        return snn_with_adapter
+    
+    elif encoder_train == 'train3':
+        trainable_patterns = ['layer3']
         snn.train()
-        print("SNN encoder built and TRAINABLE.")
+        
+    elif encoder_train == 'train23':
+        trainable_patterns = ['layer2', 'layer3']
+        snn.train()
+        
+    elif encoder_train == 'train2':
+        trainable_patterns = ['layer2']
+        snn.train()
+        
+    elif encoder_train == 'train123':
+        trainable_patterns = ['layer1', 'layer2', 'layer3']
+        snn.train()
+        
+    elif encoder_train == 'train_all':
+        trainable_patterns = ['stem', 'layer1', 'layer2', 'layer3']
+        snn.train()
+        
+    else:
+        trainable_patterns = []
+        snn.eval()
+    
+    # Set requires_grad for standard training strategies
+    if encoder_train != 'freeze_and_adapt':
+        for name, param in snn.named_parameters():
+            if any(pattern in name for pattern in trainable_patterns):
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+        
+        if trainable_patterns:
+            trainable_params = sum(p.numel() for p in snn.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in snn.parameters())
+            print(f"SNN encoder built with TRAINABLE layers: {trainable_patterns}")
+            print(f"  Trainable params: {trainable_params:,} / {total_params:,} ({100*trainable_params/total_params:.1f}%)")
+        else:
+            print("SNN encoder built and FROZEN.")
     
     return snn
 
@@ -235,7 +342,6 @@ def snn_encode(snn_encoder, imgs, timesteps, device):
     """
     Forward pass through SNN encoder for T timesteps.
     Returns firing rate maps f2 [B,128,H2,W2], f3 [B,256,H3,W3].
-    These are spike-based features - no floating point activations.
     """
     imgs = imgs.to(device)
     functional.reset_net(snn_encoder)
@@ -256,20 +362,18 @@ class SNNSpatialScanner(nn.Module):
     """
     SNN module that processes spatial tokens sequentially.
     Membrane state accumulates spatial context - not reset between tokens.
-    Reset only once per image sequence (before scanning starts).
     """
     def __init__(self, in_channels, hidden_channels=None):
         super().__init__()
         hc = hidden_channels or in_channels
-        # Conv1x1 with bias - no normalization needed
         self.proj    = nn.Conv2d(in_channels, hc, 1, bias=True)
-        self.if_node = neuron.IFNode(v_threshold=1.0, v_reset=None)  # soft reset
+        self.if_node = neuron.IFNode(v_threshold=1.0, v_reset=None)
 
     def forward(self, x):
         """x: [B, C, 1, 1]"""
         h = self.proj(x)
         s = self.if_node(h)
-        return s, self.if_node.v  # (spike, membrane)
+        return s, self.if_node.v
 
     def reset(self):
         """Reset membrane potential - call once before scanning sequence"""
@@ -337,7 +441,6 @@ def scan_feature_map(feat, scanner, scan_dir):
       spike_map: [B, H, W] - spike output per spatial position
       vmem_map:  [B, H, W] - membrane potential per spatial position
       recon_map: [B, C, H, W] - reconstructed feature map from spikes
-                  (used for training loss)
     """
     B, C, H, W = feat.shape
     coords = SCAN_FNS[scan_dir](H, W)
@@ -346,10 +449,10 @@ def scan_feature_map(feat, scanner, scan_dir):
     vmem_map  = torch.zeros(B, H, W, device=feat.device)
     recon_map = torch.zeros(B, C, H, W, device=feat.device)
 
-    scanner.reset()  # reset ONCE before sequence, not between tokens
+    scanner.reset()
     for (r, c) in coords:
-        token       = feat[:, :, r:r+1, c:c+1]   # [B, C, 1, 1]
-        spike, vmem = scanner(token)               # [B, C, 1, 1], [B, C, 1, 1]
+        token       = feat[:, :, r:r+1, c:c+1]
+        spike, vmem = scanner(token)
         spike_map[:, r, c] = spike.mean(dim=1).squeeze(-1).squeeze(-1)
         vmem_map[:, r, c]  = vmem.abs().mean(dim=1).squeeze(-1).squeeze(-1)
         recon_map[:, :, r, c] = spike.squeeze(-1).squeeze(-1)
@@ -364,13 +467,6 @@ def scan_feature_map(feat, scanner, scan_dir):
 class ScannerLoss(nn.Module):
     """
     Feature reconstruction loss for SNNSpatialScanner.
-    Trains scanner to reproduce normal SNN firing rate features.
-    Anomaly detection: normal → low loss, anomaly → high loss.
-
-    Options:
-      mse:         L2 between recon_map and feat
-      cosine:      1 - cosine similarity per spatial position
-      mse+cosine:  combination
     """
     def __init__(self, mode='mse'):
         super().__init__()
@@ -381,10 +477,9 @@ class ScannerLoss(nn.Module):
         if self.mode == 'mse':
             return self.mse(recon_map, feat)
         elif self.mode == 'cosine':
-            # cosine per spatial position: [B, C, H, W] → mean over B,H,W
-            r = recon_map.permute(0, 2, 3, 1)  # [B, H, W, C]
+            r = recon_map.permute(0, 2, 3, 1)
             f = feat.permute(0, 2, 3, 1)
-            cos = F.cosine_similarity(r, f, dim=-1)  # [B, H, W]
+            cos = F.cosine_similarity(r, f, dim=-1)
             return (1 - cos).mean()
         else:  # mse+cosine
             r = recon_map.permute(0, 2, 3, 1)
@@ -402,20 +497,27 @@ def train(args, snn_encoder, scanner_f2, scanner_f3,
     
     criterion = ScannerLoss(mode=args.loss)
     
-    # Thu thập parameters cần train
-    trainable_params = list(scanner_f2.parameters()) + list(scanner_f3.parameters())
+    # Check if encoder has trainable parameters
+    encoder_trainable = [p for p in snn_encoder.parameters() if p.requires_grad]
     
-    # Nếu train encoder, thêm vào
-    if args.train_encoder:
-        trainable_params += list(snn_encoder.parameters())
-        # Dùng learning rate nhỏ hơn cho encoder
+    # Setup optimizer
+    if encoder_trainable:
         optimizer = optim.Adam([
             {'params': scanner_f2.parameters(), 'lr': args.lr},
             {'params': scanner_f3.parameters(), 'lr': args.lr},
-            {'params': snn_encoder.parameters(), 'lr': args.lr * 0.1},  # LR nhỏ hơn 10x
+            {'params': encoder_trainable, 'lr': args.lr * args.encoder_lr_ratio},
         ], weight_decay=args.weight_decay)
+        print(f"\nTraining configuration:")
+        print(f"  Scanner LR: {args.lr}")
+        print(f"  Encoder LR: {args.lr * args.encoder_lr_ratio} (ratio={args.encoder_lr_ratio})")
+        print(f"  Trainable encoder params: {sum(p.numel() for p in encoder_trainable):,}")
     else:
-        optimizer = optim.Adam(trainable_params, lr=args.lr, weight_decay=args.weight_decay)
+        optimizer = optim.Adam(
+            list(scanner_f2.parameters()) + list(scanner_f3.parameters()),
+            lr=args.lr, weight_decay=args.weight_decay)
+        print(f"\nTraining configuration:")
+        print(f"  Scanner LR: {args.lr}")
+        print(f"  Encoder: FROZEN")
 
     os.makedirs(args.save_dir, exist_ok=True)
     best_loss = float('inf')
@@ -423,6 +525,11 @@ def train(args, snn_encoder, scanner_f2, scanner_f3,
     for epoch in range(args.epochs):
         scanner_f2.train()
         scanner_f3.train()
+        if encoder_trainable:
+            snn_encoder.train()
+        else:
+            snn_encoder.eval()
+            
         total_loss = 0.0
 
         pbar = tqdm(train_loader,
@@ -430,18 +537,24 @@ def train(args, snn_encoder, scanner_f2, scanner_f3,
                     disable=os.environ.get('DISABLE_TQDM', '0') == '1')
 
         for imgs, _ in pbar:
-            # Step 1: get SNN firing rate features (no grad, encoder frozen)
+            # Step 1: get SNN firing rate features
             rate_f2, rate_f3 = snn_encode(snn_encoder, imgs, args.timesteps, device)
 
             optimizer.zero_grad()
             loss = torch.tensor(0.0, device=device)
 
-            # Step 2: scan f2 across all directions, compute reconstruction loss
+            # Step 2: scan and compute reconstruction loss
             for scan_dir in args.scan_directions:
                 _, _, recon_f2 = scan_feature_map(rate_f2, scanner_f2, scan_dir)
                 _, _, recon_f3 = scan_feature_map(rate_f3, scanner_f3, scan_dir)
-                loss = loss + criterion(recon_f2, rate_f2.detach())
-                loss = loss + criterion(recon_f3, rate_f3.detach())
+                
+                # Only detach if encoder is frozen
+                if encoder_trainable:
+                    loss = loss + criterion(recon_f2, rate_f2)
+                    loss = loss + criterion(recon_f3, rate_f3)
+                else:
+                    loss = loss + criterion(recon_f2, rate_f2.detach())
+                    loss = loss + criterion(recon_f3, rate_f3.detach())
 
             loss = loss / (2 * len(args.scan_directions))
             loss.backward()
@@ -507,13 +620,6 @@ def score_image(args, snn_encoder, scanner_f2, scanner_f3,
                 img_tensor, device):
     """
     Compute anomaly score map for one image.
-
-    Score per spatial position = firing rate deviation (reconstruction error)
-                                 weighted by membrane residual.
-    Aggregate across scan directions → final score map.
-
-    Full spiking: snn_encoder produces spike-based features,
-    scanner processes them token-by-token with membrane context.
     """
     snn_encoder.eval()
     scanner_f2.eval()
@@ -539,7 +645,6 @@ def score_image(args, snn_encoder, scanner_f2, scanner_f3,
                 vmem_map_f2[r, c]  = vmem.abs().mean()
                 recon_map_f2[:, :, r, c] = spike.squeeze(-1).squeeze(-1)
 
-            # Reconstruction error per pixel (MSE in feature space)
             recon_err_f2 = (recon_map_f2 - rate_f2).pow(2).mean(dim=1).squeeze(0)
             v_norm_f2    = vmem_map_f2 / (vmem_map_f2.max() + 1e-8)
             score_maps_f2.append(recon_err_f2 * (1.0 + v_norm_f2))
@@ -561,17 +666,14 @@ def score_image(args, snn_encoder, scanner_f2, scanner_f3,
             v_norm_f3    = vmem_map_f3 / (vmem_map_f3.max() + 1e-8)
             score_maps_f3.append(recon_err_f3 * (1.0 + v_norm_f3))
 
-    # Aggregate across scan directions
-    score_f2 = torch.stack(score_maps_f2).mean(0)  # [H2, W2]
-    score_f3 = torch.stack(score_maps_f3).mean(0)  # [H3, W3]
+    score_f2 = torch.stack(score_maps_f2).mean(0)
+    score_f3 = torch.stack(score_maps_f3).mean(0)
 
-    # Upsample f3 → f2 resolution, then average
     score_f3_up = F.interpolate(score_f3.unsqueeze(0).unsqueeze(0).float(),
                                  size=(H2, W2), mode='bilinear',
                                  align_corners=False).squeeze()
-    combined = (score_f2 + score_f3_up) / 2.0  # [H2, W2]
+    combined = (score_f2 + score_f3_up) / 2.0
 
-    # Upsample to IMG_SIZE
     score_map = F.interpolate(combined.unsqueeze(0).unsqueeze(0).float(),
                                size=(args.img_size, args.img_size),
                                mode='bilinear', align_corners=False
@@ -630,9 +732,10 @@ def main():
     print('=' * 60)
     print(f'S3AD  |  category={args.name}  |  mode={args.mode}')
     print(f'Device: {device}  |  T={args.timesteps}  |  scan={args.scan_directions}')
+    print(f'Encoder strategy: {args.encoder_train}')
     print('=' * 60)
 
-    # ── WandB ──
+    # -- WandB --
     wandb_run = None
     if args.wandb and WANDB_AVAILABLE:
         if args.wandb_key:
@@ -640,12 +743,12 @@ def main():
         try:
             wandb_run = wandb.init(
                 project=args.wandb_project,
-                name=f'{args.name}_T{args.timesteps}_{args.loss}',
+                name=f'{args.name}_T{args.timesteps}_{args.loss}_{args.encoder_train}',
                 config=vars(args))
         except Exception as e:
             print(f'WandB init failed: {e}')
 
-    # ── Build SNN Encoder ──
+    # -- Build SNN Encoder --
     print('\n[1/3] Building SNN encoder (ResNet-18 ANN2SNN)...')
     ann_encoder = ResNetEncoder().to(device)
     ann_encoder.eval()
@@ -665,9 +768,10 @@ def main():
                                collate_fn=collate_train)
     snn_encoder = build_snn_encoder(ann_encoder, calib_loader,
                                  device, mode=args.snn_mode,
-                                 trainable=args.train_encoder)
+                                 encoder_train=args.encoder_train,
+                                 adapter_channels=args.adapter_channels)
 
-    # ── Build Scanners ──
+    # -- Build Scanners --
     print('\n[2/3] Building SNN spatial scanners...')
     scanner_f2 = SNNSpatialScanner(
         in_channels=128,
@@ -683,7 +787,7 @@ def main():
         scanner_f3.load_state_dict(ckpt['scanner_f3'])
         print(f'  Resumed from: {args.resume}')
 
-    # ── Train ──
+    # -- Train --
     if args.mode in ('train', 'both'):
         print(f'\n[3a/3] Training scanners on {args.name} normal data...')
         full_train_ds = MVTecDataset(args.data_path, args.name, 'train',
@@ -694,7 +798,7 @@ def main():
         train(args, snn_encoder, scanner_f2, scanner_f3,
               train_loader, device, wandb_run)
 
-    # ── Test ──
+    # -- Test --
     if args.mode in ('test', 'both'):
         print(f'\n[3b/3] Testing on {args.name}...')
 
@@ -722,11 +826,13 @@ def main():
 
         # Save result
         out = os.path.join(args.result_dir, f'{args.name}_result.txt')
-        with open(out, 'w') as f:
+        with open(out, 'w', encoding='utf-8') as f:
             f.write(f'S3AD Result - {args.name}\n')
             f.write(f'Timesteps: {args.timesteps}\n')
             f.write(f'Scan directions: {args.scan_directions}\n')
             f.write(f'Loss: {args.loss}\n')
+            f.write(f'Encoder strategy: {args.encoder_train}\n')
+            f.write(f'Encoder LR ratio: {args.encoder_lr_ratio}\n')
             f.write(f'Image AUC: {ia}\n')
             f.write(f'Pixel AUC: {pa}\n')
         print(f'  Result saved: {out}')
