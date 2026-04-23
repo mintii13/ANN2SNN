@@ -723,7 +723,7 @@ def main():
         pix_aucs = [results[T]['pix_auc'] for T in timesteps]
         
         wandb_run.config.update({
-            'dataset': args.name,
+            'category': args.name,  
             'layers': args.layers,
             'use_membrane': args.use_membrane,
             'snn_mode': args.snn_mode,
