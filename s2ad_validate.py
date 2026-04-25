@@ -48,65 +48,113 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# SECTION 1 - ResNet-18 Encoder (ANN)
-# ═══════════════════════════════════════════════════════════════════════════
-
-class ResNetEncoder(nn.Module):
-    """
-    ResNet pretrained encoder.
-    Supports resnet18, resnet34, resnet50.
-    Outputs feature maps from layer1, layer2, layer3 as tuple.
-    """
+class BackboneEncoder(nn.Module):
     def __init__(self, backbone='resnet18', layers='layer23'):
         super().__init__()
+        self.backbone_name = backbone
+        self.layers = layers
+        self._build_backbone(backbone)
         
-        # Chọn backbone
-        if backbone == 'resnet18':
-            self.backbone_model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
-            self.feat_channels = {'layer1': 64, 'layer2': 128, 'layer3': 256}
-        elif backbone == 'resnet34':
-            self.backbone_model = models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1)
-            self.feat_channels = {'layer1': 64, 'layer2': 128, 'layer3': 256}
-        elif backbone == 'resnet50':
-            self.backbone_model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    def _build_backbone(self, backbone):
+        # ========== RESNET & WIDE RESNET ==========
+        if backbone in ['resnet18', 'resnet34', 'resnet50', 'wide_resnet50_2', 'wide_resnet101_2']:
+            if backbone == 'resnet18':
+                model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+                self.feat_channels = {'layer1': 64, 'layer2': 128, 'layer3': 256}
+            elif backbone == 'resnet34':
+                model = models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1)
+                self.feat_channels = {'layer1': 64, 'layer2': 128, 'layer3': 256}
+            elif backbone == 'resnet50':
+                model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+                self.feat_channels = {'layer1': 256, 'layer2': 512, 'layer3': 1024}
+            elif backbone == 'wide_resnet50_2':
+                model = models.wide_resnet50_2(weights=models.Wide_ResNet50_2_Weights.IMAGENET1K_V1)
+                self.feat_channels = {'layer1': 256, 'layer2': 512, 'layer3': 1024}
+            elif backbone == 'wide_resnet101_2':
+                model = models.wide_resnet101_2(weights=models.Wide_ResNet101_2_Weights.IMAGENET1K_V1)
+                self.feat_channels = {'layer1': 256, 'layer2': 512, 'layer3': 1024}
+            # Cắt lấy các thành phần
+            self.stem = nn.Sequential(model.conv1, model.bn1, model.relu, model.maxpool)
+            self.layer1 = model.layer1
+            self.layer2 = model.layer2
+            self.layer3 = model.layer3
+            self.is_resnet = True
+            return
+        
+        # ========== CÁC BACKBONE DẠNG SEQUENTIAL (VGG, AlexNet, MobileNet, DenseNet) ==========
+        self.is_resnet = False
+        
+        if backbone.startswith('vgg'):
+            variants = {
+                'vgg11': (models.vgg11, 8, 15, 22),
+                'vgg13': (models.vgg13, 6, 11, 16),
+                'vgg16': (models.vgg16, 8, 15, 22),
+                'vgg19': (models.vgg19, 9, 16, 25)
+            }
+            creator, idx1, idx2, idx3 = variants[backbone]
+            model = creator(weights='IMAGENET1K_V1').features
+            self.feat_channels = {'layer1': 256, 'layer2': 512, 'layer3': 512}
+            self.output_indices = [idx1, idx2, idx3]
+        elif backbone == 'alexnet':
+            model = models.alexnet(weights='IMAGENET1K_V1').features
+            self.feat_channels = {'layer1': 192, 'layer2': 256, 'layer3': 256}
+            self.output_indices = [4, 7, 9]   # sau conv2, conv3, conv5
+        elif backbone == 'mobilenet_v2':
+            model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.IMAGENET1K_V1).features
+            self.feat_channels = {'layer1': 32, 'layer2': 96, 'layer3': 320}
+            self.output_indices = [3, 10, 17]  # blocks 4, 10, 17
+        elif backbone == 'mobilenet_v3_large':
+            model = models.mobilenet_v3_large(weights=models.MobileNet_V3_Large_Weights.IMAGENET1K_V1).features
+            self.feat_channels = {'layer1': 40, 'layer2': 112, 'layer3': 160}
+            self.output_indices = [3, 8, 12]
+        elif backbone in ['densenet121', 'densenet169']:
+            if backbone == 'densenet121':
+                model = models.densenet121(weights=models.DenseNet121_Weights.IMAGENET1K_V1).features
+            else:
+                model = models.densenet169(weights=models.DenseNet169_Weights.IMAGENET1K_V1).features
             self.feat_channels = {'layer1': 256, 'layer2': 512, 'layer3': 1024}
+            self.output_indices = [4, 6, 8]   # sau dense block 2, 3, 4
         else:
             raise ValueError(f"Unsupported backbone: {backbone}")
         
-        self.stem = nn.Sequential(
-            self.backbone_model.conv1, 
-            self.backbone_model.bn1, 
-            self.backbone_model.relu, 
-            self.backbone_model.maxpool
-        )
-        self.layer1 = self.backbone_model.layer1
-        self.layer2 = self.backbone_model.layer2
-        self.layer3 = self.backbone_model.layer3
-        self.layers = layers
-        self.backbone_name = backbone
-        
+        self.features = model
+        # Đảm bảo output_indices sắp xếp tăng dần (để layer1 là sớm nhất)
+        self.output_indices = sorted(self.output_indices)
+    
     def forward(self, x):
-        x = self.stem(x)
-        f1 = self.layer1(x)
-        f2 = self.layer2(f1)
-        f3 = self.layer3(f2)
-        
-        if self.layers == 'layer1':
-            return (f1,)
-        elif self.layers == 'layer2':
-            return (f2,)
-        elif self.layers == 'layer3':
-            return (f3,)
-        elif self.layers == 'layer12':
-            return (f1, f2)
-        elif self.layers == 'layer23':
-            return (f2, f3)
-        elif self.layers == 'layer123':
-            return (f1, f2, f3)
+        if self.is_resnet:
+            x = self.stem(x)
+            f1 = self.layer1(x)
+            f2 = self.layer2(f1)
+            f3 = self.layer3(f2)
+            outputs = [f1, f2, f3]
         else:
-            return (f2, f3)
-
+            outputs = []
+            for i, layer in enumerate(self.features):
+                x = layer(x)
+                if i in self.output_indices:
+                    outputs.append(x)
+            # Đảm bảo có đúng 3 output (nếu thiếu thì lấy output cuối cùng lặp lại)
+            while len(outputs) < 3:
+                outputs.append(x)
+            if len(outputs) > 3:
+                outputs = outputs[:3]
+        
+        # Chọn output dựa trên self.layers
+        if self.layers == 'layer1':
+            return (outputs[0],)
+        elif self.layers == 'layer2':
+            return (outputs[1],)
+        elif self.layers == 'layer3':
+            return (outputs[2],)
+        elif self.layers == 'layer12':
+            return (outputs[0], outputs[1])
+        elif self.layers == 'layer23':
+            return (outputs[1], outputs[2])
+        elif self.layers == 'layer123':
+            return tuple(outputs)
+        else:
+            return (outputs[1], outputs[2])
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 2 - Dataset
@@ -545,8 +593,10 @@ def parse_args():
     parser.add_argument('--layers', type=str, default='layer23',
                         choices=['layer1', 'layer2', 'layer3', 'layer12', 'layer23', 'layer123'])
     parser.add_argument('--backbone', type=str, default='resnet18',
-                        choices=['resnet18', 'resnet34', 'resnet50'],
-                        help='Backbone architecture (default: resnet18)')
+                    choices=['resnet18', 'resnet34', 'resnet50', 'wide_resnet50_2', 'wide_resnet101_2',
+                             'vgg11', 'vgg13', 'vgg16', 'vgg19', 'alexnet',
+                             'mobilenet_v2', 'mobilenet_v3_large', 'densenet121', 'densenet169'],
+                    help='Backbone architecture')
     
     parser.add_argument('--use_membrane', action='store_true')
     parser.add_argument('--batch_size', type=int, default=16)
@@ -609,8 +659,8 @@ def main():
             print(f'WandB init failed: {e}')
     
     # Build ANN encoder
-    print(f'\n[1/4] Building ResNet encoder (backbone={args.backbone})...')
-    ann_encoder = ResNetEncoder(backbone=args.backbone, layers=args.layers).to(device)  # Thêm backbone
+    print(f'\n[1/4] Building encoder (backbone={args.backbone})...')
+    ann_encoder = BackboneEncoder(backbone=args.backbone, layers=args.layers).to(device)
     ann_encoder.eval()
     
     dummy = torch.randn(2, 3, args.img_size, args.img_size).to(device)
@@ -628,7 +678,7 @@ def main():
     print(f'  Full normal set: {len(full_normal_ds)} images')
     
     # Tạo subset cho calibration
-    if args.calib_samples < len(full_normal_ds):
+    if args.calib_samples > 0 and args.calib_samples < len(full_normal_ds):
         calib_indices = list(range(args.calib_samples))
         calib_subset = Subset(full_normal_ds, calib_indices)
         calib_loader = DataLoader(
@@ -692,7 +742,6 @@ def main():
             mean_val = stats['mean'].mean().item()
             std_val = stats['std'].mean().item()
             firing_rate_stats[T][name] = {'mean': mean_val, 'std': std_val}
-            print(f'    {name}: mean={mean_val:.4f}, std={std_val:.4f}')
         
         # Evaluate
         img_auc, pix_auc, img_scores, img_labels = evaluate(
