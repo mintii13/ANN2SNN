@@ -43,7 +43,7 @@ VISA_CATEGORIES = [
 
 # Paths
 DEFAULT_DATA_ROOT = '/home/minhtringuyen/ANN2SNN/datasets'
-BASE_SAVE_DIR = './s2ad_results_config_7metrics_0.98'
+BASE_SAVE_DIR = './s2ad_results_config_7metrics_0.85'
 S2AD_SCRIPT = 's2ad_validate.py'
 
 # Common parameters (có thể override qua command line nếu muốn, nhưng để cứng)
@@ -58,25 +58,6 @@ COMMON_ARGS = {
 # DEFINE ALL CONFIGURATIONS (theo từng nhóm)
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Nhóm 1: Kiểm tra backbone layers (use_membrane=False, calib=100, combine=mad_weighted)
-backbone_configs = [
-    {'layers': 'layer1',   'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'backbone_layer1'},
-    {'layers': 'layer2',   'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'backbone_layer2'},
-    {'layers': 'layer3',   'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'backbone_layer3'},
-]
-
-# Nhóm 2: Kiểm tra combine method trên các layer khác nhau
-combine_configs = [
-    # layer23
-    {'combine_method': 'simple',      'layers': 'layer23', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_simple_layer23'},
-    # layer12
-    {'combine_method': 'simple',      'layers': 'layer12', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_simple_layer12'},
-    # layer123
-    {'combine_method': 'simple',      'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_simple_layer123'},
-    {'combine_method': 'mad_weighted','layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_mad_layer123'},
-]
-
-# Nhóm 3: Kiểm tra backbone architecture (dùng layer123, combine=mad_weighted, calib=100)
 arch_configs = [
     {'backbone': 'resnet18', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet18_layer123'},
     {'backbone': 'resnet34', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet34_layer123'},
@@ -92,8 +73,6 @@ arch_configs = [
 
 # Gộp tất cả configs theo nhóm (để dễ dàng chọn lọc)
 ALL_CONFIG_GROUPS = {
-    'backbone': backbone_configs,
-    'combine': combine_configs,
     'arch': arch_configs,
 }
 
@@ -130,7 +109,7 @@ def run_s2ad(category, config, args, dataset):
         '--img_size', str(COMMON_ARGS['img_size']),
         '--batch_size', str(config.get('batch_size', COMMON_ARGS['batch_size'])),
         '--calib_samples', str(calib_samples),
-        '--snn_mode', config.get('snn_mode', '0.98'),
+        '--snn_mode', config.get('snn_mode', '0.85'),
         '--save_dir', config_save_dir,
         '--combine_method', config.get('combine_method', args.combine_method),
     ]
@@ -372,7 +351,7 @@ def parse_args():
     parser.add_argument('--configs', type=str, nargs='+', default=['backbone'],
                         choices=['backbone', 'combine', 'arch', 'all'],
                         help='Which config groups to run')
-    parser.add_argument('--backbone', type=str, default='resnet18',
+    parser.add_argument('--backbone', type=str, default='vgg16',
                     choices=['resnet18', 'resnet34', 'resnet50', 'wide_resnet50_2', 'wide_resnet101_2',
                              'vgg11', 'vgg13', 'vgg16', 'vgg19', 'alexnet',
                              'mobilenet_v2', 'mobilenet_v3_large', 'densenet121', 'densenet169'],
@@ -401,9 +380,9 @@ def main():
     
     # Chọn các config dựa trên nhóm
     selected_configs = []
-    config_groups = args.configs if args.configs else ['backbone']
+    config_groups = args.configs if args.configs else ['arch']
     if 'all' in config_groups:
-        config_groups = ['backbone', 'combine', 'arch']
+        config_groups = ['arch']
     
     for grp in config_groups:
         if grp in ALL_CONFIG_GROUPS:

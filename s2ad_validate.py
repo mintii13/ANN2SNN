@@ -30,6 +30,8 @@ from sklearn.metrics import roc_auc_score
 from spikingjelly.activation_based import ann2snn, functional
 import random
 from torch.utils.data import DataLoader, Dataset, Subset
+from sklearn.metrics import roc_auc_score, precision_recall_curve, average_precision_score, auc
+from scipy.ndimage import label as connected_components
 import setproctitle
 setproctitle.setproctitle("Minh Tri is training...") 
 
@@ -306,12 +308,11 @@ def build_snn_encoder(ann_encoder, calib_loader, device, mode='max'):
 
     if mode == 'max':
         converter_mode = 'max'
-    elif mode == '0.99':
-        converter_mode = 0.99  # float, không phải string
-    elif mode == '0.9':
-        converter_mode = 0.9
     else:
-        converter_mode = mode  # nếu là float thì dùng trực tiếp
+        try:
+            converter_mode = float(mode)   # "0.98" → 0.98
+        except ValueError:
+            converter_mode = mode   # fallback (sẽ không dùng đến)
     
     converter = ann2snn.Converter(
         dataloader=adapter,
@@ -535,10 +536,78 @@ def _get_membrane_score(snn_encoder):
 # SECTION 7 - Evaluation
 # ═══════════════════════════════════════════════════════════════════════════
 
+def compute_pro_metric(gt_masks, anomaly_maps, fpr_limit=0.3):
+    """
+    Tính PRO (Per-Region Overlap) AUC up to FPR Limit bằng Numpy thuần cực nhanh.
+    """
+    if not gt_masks or not anomaly_maps:
+        return 0.0
+
+    all_amaps = np.array(anomaly_maps)
+    all_masks = np.array(gt_masks)
+
+    # Gom điểm số của vùng không bị lỗi (normal) để tính FPR
+    normal_scores = all_amaps[all_masks == 0]
+    total_normal_pixels = len(normal_scores)
+    if total_normal_pixels == 0:
+        return 0.0
+
+    # Lấy 100 threshold chia đều từ min đến max của bộ điểm
+    thresholds = np.linspace(all_amaps.min(), all_amaps.max(), 100)
+    
+    # Sắp xếp normal_score để dùng binary search cho nhanh
+    normal_scores_sorted = np.sort(normal_scores)
+
+    # Lấy trước các Region (Tránh vòng lặp tính đi tính lại)
+    regions_list = []
+    for mask in all_masks:
+        labeled, num_regions = connected_components(mask)
+        regions_list.append([labeled == reg_id for reg_id in range(1, num_regions + 1)])
+
+    fprs = []
+    pros = []
+
+    for t in thresholds:
+        # 1. Tính FPR bằng thuật toán tìm kiếm nhị phân (Siêu nhanh)
+        fp_count = total_normal_pixels - np.searchsorted(normal_scores_sorted, t)
+        fpr = fp_count / total_normal_pixels
+        fprs.append(fpr)
+
+        # 2. Tính PRO trung bình cho ngưỡng này
+        overlaps = []
+        for img_idx, regions in enumerate(regions_list):
+            for region_mask in regions:
+                region_scores = all_amaps[img_idx][region_mask]
+                if region_scores.size > 0:
+                    overlap_ratio = (region_scores >= t).sum() / region_scores.size
+                    overlaps.append(overlap_ratio)
+
+        pros.append(np.mean(overlaps) if overlaps else 0.0)
+
+    fprs = np.array(fprs)
+    pros = np.array(pros)
+
+    # Lọc các điểm nằm trong giới hạn FPR (expect_fpr = 0.3)
+    idxes = fprs <= fpr_limit
+    fprs_valid = fprs[idxes]
+    pros_valid = pros[idxes]
+
+    if len(fprs_valid) < 2:
+        return 0.0
+
+    fprs_normalized = (fprs_valid - fprs_valid.min()) / (fprs_valid.max() - fprs_valid.min() + 1e-8)
+
+    # Tích phân diện tích trên trục FPR đã được chuẩn hóa
+    pro_auc = auc(fprs_normalized, pros_valid)
+    
+    return float(pro_auc)
+
 def evaluate(snn_encoder, test_dataset, normal_stats, device, timesteps,
              layers='layer23', img_size=256, use_membrane=False, combine_method='simple'):
     img_scores, img_labels = [], []
     pix_scores, pix_labels = [], []
+    gt_masks = []
+    anomaly_maps = []
     
     for i in range(len(test_dataset)):
         img_t, lbl, gt_path = test_dataset[i]
@@ -557,13 +626,38 @@ def evaluate(snn_encoder, test_dataset, normal_stats, device, timesteps,
             if gt is not None:
                 gt = cv2.resize(gt, (img_size, img_size))
                 gt_bin = (gt > 127).astype(int)
-                pix_scores.extend(score_map.flatten().tolist())
-                pix_labels.extend(gt_bin.flatten().tolist())
+                pix_scores.extend(score_map.flatten())
+                pix_labels.extend(gt_bin.flatten())
+                gt_masks.append(gt_bin)
+                anomaly_maps.append(score_map)
     
+    # Image metrics
     img_auc = roc_auc_score(img_labels, img_scores) if len(set(img_labels)) == 2 else None
-    pix_auc = roc_auc_score(pix_labels, pix_scores) if pix_labels and len(set(pix_labels)) == 2 else None
+    img_ap = average_precision_score(img_labels, img_scores) if len(set(img_labels)) == 2 else None
     
-    return img_auc, pix_auc, img_scores, img_labels
+    prec, rec, _ = precision_recall_curve(img_labels, img_scores)
+    f1_scores = 2 * (prec * rec) / (prec + rec + 1e-8)
+    img_f1 = np.max(f1_scores) if len(f1_scores) > 0 else 0.0
+    
+    # Pixel metrics
+    pix_auc = roc_auc_score(pix_labels, pix_scores) if pix_labels else None
+    pix_ap = average_precision_score(pix_labels, pix_scores) if pix_labels else None
+    pprec, prec_rec, _ = precision_recall_curve(pix_labels, pix_scores)
+    pf1_scores = 2 * (pprec * prec_rec) / (pprec + prec_rec + 1e-8)
+    pix_f1 = np.max(pf1_scores) if len(pf1_scores) > 0 else 0.0
+    
+    pro_score = compute_pro_metric(gt_masks, anomaly_maps) if gt_masks else 0.0
+    
+    metrics = {
+        'img_auc': img_auc or 0.0,
+        'img_ap': img_ap or 0.0,
+        'img_f1': img_f1,
+        'pix_auc': pix_auc or 0.0,
+        'pix_ap': pix_ap or 0.0,
+        'pix_f1': pix_f1,
+        'pro': pro_score,
+    }
+    return metrics, img_scores, img_labels
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -588,7 +682,8 @@ def parse_args():
     parser.add_argument('--timesteps', type=int, nargs='+', default=[16],
                         help='List of timesteps to evaluate (e.g., 8 16 32 64)')
     parser.add_argument('--calib_samples', type=int, default=500)
-    parser.add_argument('--snn_mode', type=str, default='max', choices=['max', '0.99', '0.9'])
+    parser.add_argument('--snn_mode', type=str, default='max',
+                    help='ANN2SNN mode: "max" or a percentile value (e.g., "0.99", "0.98")')
     
     parser.add_argument('--layers', type=str, default='layer23',
                         choices=['layer1', 'layer2', 'layer3', 'layer12', 'layer23', 'layer123'])
@@ -677,19 +772,27 @@ def main():
     full_normal_ds = dataset_class(data_root, args.name, 'train', img_size=args.img_size)
     print(f'  Full normal set: {len(full_normal_ds)} images')
     
-    # Tạo subset cho calibration
+        # Tạo subset chung cho calibration và normal statistics
     if args.calib_samples > 0 and args.calib_samples < len(full_normal_ds):
-        calib_indices = list(range(args.calib_samples))
-        calib_subset = Subset(full_normal_ds, calib_indices)
+        subset_indices = list(range(args.calib_samples))
+        normal_subset = Subset(full_normal_ds, subset_indices)
         calib_loader = DataLoader(
-            calib_subset,
+            normal_subset,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=2,
             generator=g,
             worker_init_fn=lambda worker_id: np.random.seed(42 + worker_id)
         )
-        print(f'  Calibration using {args.calib_samples} samples (subset of {len(full_normal_ds)})')
+        normal_loader = DataLoader(
+            normal_subset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=2,
+            generator=g,
+            worker_init_fn=lambda worker_id: np.random.seed(42 + worker_id)
+        )
+        print(f'  Using {args.calib_samples} samples for both calibration and normal statistics')
     else:
         calib_loader = DataLoader(
             full_normal_ds,
@@ -699,17 +802,15 @@ def main():
             generator=g,
             worker_init_fn=lambda worker_id: np.random.seed(42 + worker_id)
         )
-        print(f'  Calibration using full normal set ({len(full_normal_ds)} samples)')
-
-    # Dataloader cho normal statistics (dùng TOÀN BỘ)
-    normal_loader = DataLoader(
-        full_normal_ds,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=2,
-        generator=g,
-        worker_init_fn=lambda worker_id: np.random.seed(42 + worker_id)
-    )
+        normal_loader = DataLoader(
+            full_normal_ds,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=2,
+            generator=g,
+            worker_init_fn=lambda worker_id: np.random.seed(42 + worker_id)
+        )
+        print(f'  Using full normal set for both calibration and normal statistics')
 
     
     # ANN2SNN conversion - dùng calib_loader
@@ -726,8 +827,8 @@ def main():
     
     # Evaluate for each timestep - dùng normal_loader cho statistics
     print('\n[4/4] Evaluating across timesteps...')
-    print(f'\n{"Timestep":>8} | {"Image AUC":>10} | {"Pixel AUC":>10}')
-    print('-' * 35)
+    print(f'\n{"Timestep":>8} | {"Img AUC":>8} | {"Img AP":>8} | {"Img F1":>8} | {"Pix AUC":>8} | {"Pix AP":>8} | {"Pix F1":>8} | {"PRO":>8}')
+    print('-' * 90)
     
     results = {}
     firing_rate_stats = {}
@@ -744,26 +845,34 @@ def main():
             firing_rate_stats[T][name] = {'mean': mean_val, 'std': std_val}
         
         # Evaluate
-        img_auc, pix_auc, img_scores, img_labels = evaluate(
+        metrics, img_scores, img_labels = evaluate(
             snn_encoder, test_ds, normal_stats, device, T,
             args.layers, args.img_size, args.use_membrane, args.combine_method
         )
         
-        img_auc_val = img_auc if img_auc else 0.0
-        pix_auc_val = pix_auc if pix_auc else 0.0
+        img_auc_val = metrics['img_auc'] if metrics['img_auc'] else 0.0
+        pix_auc_val = metrics['pix_auc'] if metrics['pix_auc'] else 0.0
         
-        results[T] = {'img_auc': img_auc_val, 'pix_auc': pix_auc_val}
+        results[T] = {
+            'img_auc': metrics['img_auc'],
+            'img_ap': metrics['img_ap'],
+            'img_f1': metrics['img_f1'],
+            'pix_auc': metrics['pix_auc'],
+            'pix_ap': metrics['pix_ap'],
+            'pix_f1': metrics['pix_f1'],
+            'pro': metrics['pro'],
+        }
         
-        print(f'  {T:8d} | {img_auc_val:10.4f} | {pix_auc_val:10.4f}')
+        print(f'  {T:8d} | {results[T]["img_auc"]:8.4f} | {results[T]["img_ap"]:8.4f} | {results[T]["img_f1"]:8.4f} | {results[T]["pix_auc"]:8.4f} | {results[T]["pix_ap"]:8.4f} | {results[T]["pix_f1"]:8.4f} | {results[T]["pro"]:8.4f}')
     
     # Print summary table
-    print('\n' + '=' * 60)
+    print('\n' + '=' * 90)
     print('SUMMARY RESULTS:')
-    print(f'{"Timestep":>8} | {"Image AUC":>10} | {"Pixel AUC":>10}')
-    print('-' * 35)
+    print(f'{"Timestep":>8} | {"Img AUC":>8} | {"Img AP":>8} | {"Img F1":>8} | {"Pix AUC":>8} | {"Pix AP":>8} | {"Pix F1":>8} | {"PRO":>8}')
+    print('-' * 90)
     for T in sorted(results.keys()):
-        print(f'{T:8d} | {results[T]["img_auc"]:10.4f} | {results[T]["pix_auc"]:10.4f}')
-    print('=' * 60)
+        print(f'{T:8d} | {results[T]["img_auc"]:8.4f} | {results[T]["img_ap"]:8.4f} | {results[T]["img_f1"]:8.4f} | {results[T]["pix_auc"]:8.4f} | {results[T]["pix_ap"]:8.4f} | {results[T]["pix_f1"]:8.4f} | {results[T]["pro"]:8.4f}')
+    print('=' * 90)
     
     # Log to WandB (giữ nguyên phần này)
     if wandb_run:
@@ -808,7 +917,12 @@ def main():
         log_dict = {}
         for T in timesteps:
             log_dict[f'img_auc_T{T}'] = results[T]['img_auc']
+            log_dict[f'img_ap_T{T}'] = results[T]['img_ap']
+            log_dict[f'img_f1_T{T}'] = results[T]['img_f1']
             log_dict[f'pix_auc_T{T}'] = results[T]['pix_auc']
+            log_dict[f'pix_ap_T{T}'] = results[T]['pix_ap']
+            log_dict[f'pix_f1_T{T}'] = results[T]['pix_f1']
+            log_dict[f'pro_T{T}'] = results[T]['pro']
         wandb_run.log(log_dict)
         
         wandb_run.summary['best_img_auc'] = max(img_aucs)
@@ -826,18 +940,16 @@ def main():
         f.write(f"Layers: {args.layers}\n")
         f.write(f"Use membrane: {args.use_membrane}\n")
         f.write(f"Calibration samples: {args.calib_samples}\n")
-        f.write(f"\n{'Timestep':>8} | {'Image AUC':>10} | {'Pixel AUC':>10}\n")
-        f.write('-' * 35 + '\n')
+        f.write(f"\n{'Timestep':>8} | {'Img AUC':>8} | {'Img AP':>8} | {'Img F1':>8} | {'Pix AUC':>8} | {'Pix AP':>8} | {'Pix F1':>8} | {'PRO':>8}\n")
+        f.write('-' * 95 + '\n')
         for T in sorted(results.keys()):
-            f.write(f'{T:8d} | {results[T]["img_auc"]:10.4f} | {results[T]["pix_auc"]:10.4f}\n')
-        
+            f.write(f'{T:8d} | {results[T]["img_auc"]:8.4f} | {results[T]["img_ap"]:8.4f} | {results[T]["img_f1"]:8.4f} | {results[T]["pix_auc"]:8.4f} | {results[T]["pix_ap"]:8.4f} | {results[T]["pix_f1"]:8.4f} | {results[T]["pro"]:8.4f}\n')
         f.write(f"\n\nFiring Rate Statistics:\n")
         f.write(f"{'=' * 50}\n")
         for T in sorted(firing_rate_stats.keys()):
             f.write(f"\nTimestep T={T}:\n")
             for layer_name, stats in firing_rate_stats[T].items():
                 f.write(f"  {layer_name}: mean={stats['mean']:.6f}, std={stats['std']:.6f}\n")
-    
     print(f'\nResults saved: {out_path}')
 
 

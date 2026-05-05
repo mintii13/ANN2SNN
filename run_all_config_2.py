@@ -43,7 +43,7 @@ VISA_CATEGORIES = [
 
 # Paths
 DEFAULT_DATA_ROOT = '/home/minhtringuyen/ANN2SNN/datasets'
-BASE_SAVE_DIR = './s2ad_results_config_7metrics_0.98'
+BASE_SAVE_DIR = './s2ad_results_config_7metrics_vgg16_0.9'
 S2AD_SCRIPT = 's2ad_validate.py'
 
 # Common parameters (có thể override qua command line nếu muốn, nhưng để cứng)
@@ -69,32 +69,19 @@ backbone_configs = [
 combine_configs = [
     # layer23
     {'combine_method': 'simple',      'layers': 'layer23', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_simple_layer23'},
+    {'combine_method': 'mad_weighted','layers': 'layer23', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_mad_layer23'},
     # layer12
     {'combine_method': 'simple',      'layers': 'layer12', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_simple_layer12'},
+    {'combine_method': 'mad_weighted','layers': 'layer12', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_mad_layer12'},
     # layer123
     {'combine_method': 'simple',      'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_simple_layer123'},
     {'combine_method': 'mad_weighted','layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'combine_mad_layer123'},
-]
-
-# Nhóm 3: Kiểm tra backbone architecture (dùng layer123, combine=mad_weighted, calib=100)
-arch_configs = [
-    {'backbone': 'resnet18', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet18_layer123'},
-    {'backbone': 'resnet34', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet34_layer123'},
-    {'backbone': 'resnet50', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet50_layer123'},
-    {'backbone': 'wide_resnet50_2', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_wide_resnet50_layer123'},
-    {'backbone': 'vgg11', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_vgg11_layer123'},
-    {'backbone': 'vgg13', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_vgg13_layer123'},
-    {'backbone': 'vgg16', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_vgg16_layer123'},
-    {'backbone': 'alexnet', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_alexnet_layer123'},
-    {'backbone': 'mobilenet_v2', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_mobilenet_v2_layer123'},
-    {'backbone': 'densenet121', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_densenet121_layer123'},
 ]
 
 # Gộp tất cả configs theo nhóm (để dễ dàng chọn lọc)
 ALL_CONFIG_GROUPS = {
     'backbone': backbone_configs,
     'combine': combine_configs,
-    'arch': arch_configs,
 }
 
 
@@ -130,7 +117,7 @@ def run_s2ad(category, config, args, dataset):
         '--img_size', str(COMMON_ARGS['img_size']),
         '--batch_size', str(config.get('batch_size', COMMON_ARGS['batch_size'])),
         '--calib_samples', str(calib_samples),
-        '--snn_mode', config.get('snn_mode', '0.98'),
+        '--snn_mode', config.get('snn_mode', '0.9'),
         '--save_dir', config_save_dir,
         '--combine_method', config.get('combine_method', args.combine_method),
     ]
@@ -372,7 +359,7 @@ def parse_args():
     parser.add_argument('--configs', type=str, nargs='+', default=['backbone'],
                         choices=['backbone', 'combine', 'arch', 'all'],
                         help='Which config groups to run')
-    parser.add_argument('--backbone', type=str, default='resnet18',
+    parser.add_argument('--backbone', type=str, default='vgg16',
                     choices=['resnet18', 'resnet34', 'resnet50', 'wide_resnet50_2', 'wide_resnet101_2',
                              'vgg11', 'vgg13', 'vgg16', 'vgg19', 'alexnet',
                              'mobilenet_v2', 'mobilenet_v3_large', 'densenet121', 'densenet169'],
