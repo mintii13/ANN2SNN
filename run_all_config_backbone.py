@@ -43,7 +43,7 @@ VISA_CATEGORIES = [
 
 # Paths
 DEFAULT_DATA_ROOT = '/home/minhtringuyen/ANN2SNN/datasets'
-BASE_SAVE_DIR = './s2ad_results_config_7metrics_0.85'
+BASE_SAVE_DIR = './s2ad_results_config_7metrics_0.8'
 S2AD_SCRIPT = 's2ad_validate.py'
 
 # Common parameters (có thể override qua command line nếu muốn, nhưng để cứng)
@@ -59,16 +59,16 @@ COMMON_ARGS = {
 # ═══════════════════════════════════════════════════════════════════════════
 
 arch_configs = [
-    {'backbone': 'resnet18', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet18_layer123'},
-    {'backbone': 'resnet34', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet34_layer123'},
-    {'backbone': 'resnet50', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet50_layer123'},
-    {'backbone': 'wide_resnet50_2', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_wide_resnet50_layer123'},
-    {'backbone': 'vgg11', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_vgg11_layer123'},
-    {'backbone': 'vgg13', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_vgg13_layer123'},
+    # {'backbone': 'resnet18', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet18_layer123'},
+    # {'backbone': 'resnet34', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet34_layer123'},
+    # {'backbone': 'resnet50', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_resnet50_layer123'},
+    # {'backbone': 'wide_resnet50_2', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_wide_resnet50_layer123'},
+    # {'backbone': 'vgg11', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_vgg11_layer123'},
+    # {'backbone': 'vgg13', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_vgg13_layer123'},
     {'backbone': 'vgg16', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_vgg16_layer123'},
-    {'backbone': 'alexnet', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_alexnet_layer123'},
-    {'backbone': 'mobilenet_v2', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_mobilenet_v2_layer123'},
-    {'backbone': 'densenet121', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_densenet121_layer123'},
+    # {'backbone': 'alexnet', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_alexnet_layer123'},
+    # {'backbone': 'mobilenet_v2', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_mobilenet_v2_layer123'},
+    # {'backbone': 'densenet121', 'layers': 'layer123', 'use_membrane': False, 'calib_samples': -1, 'batch_size': 16, 'name': 'arch_densenet121_layer123'},
 ]
 
 # Gộp tất cả configs theo nhóm (để dễ dàng chọn lọc)
@@ -109,7 +109,7 @@ def run_s2ad(category, config, args, dataset):
         '--img_size', str(COMMON_ARGS['img_size']),
         '--batch_size', str(config.get('batch_size', COMMON_ARGS['batch_size'])),
         '--calib_samples', str(calib_samples),
-        '--snn_mode', config.get('snn_mode', '0.85'),
+        '--snn_mode', config.get('snn_mode', '0.8'),
         '--save_dir', config_save_dir,
         '--combine_method', config.get('combine_method', args.combine_method),
     ]

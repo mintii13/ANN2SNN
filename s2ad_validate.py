@@ -32,6 +32,10 @@ import random
 from torch.utils.data import DataLoader, Dataset, Subset
 from sklearn.metrics import roc_auc_score, precision_recall_curve, average_precision_score, auc
 from scipy.ndimage import label as connected_components
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from PIL import Image
+import matplotlib.cm as cm
 import setproctitle
 setproctitle.setproctitle("Minh Tri is training...") 
 
@@ -603,11 +607,18 @@ def compute_pro_metric(gt_masks, anomaly_maps, fpr_limit=0.3):
     return float(pro_auc)
 
 def evaluate(snn_encoder, test_dataset, normal_stats, device, timesteps,
-             layers='layer23', img_size=256, use_membrane=False, combine_method='simple'):
+             layers='layer23', img_size=256, use_membrane=False, combine_method='mad_weighted',
+             save_maps=False, maps_dir=None, category_name=''):
     img_scores, img_labels = [], []
     pix_scores, pix_labels = [], []
     gt_masks = []
     anomaly_maps = []
+    
+    # Lấy danh sách đường dẫn ảnh từ dataset (nếu có)
+    if hasattr(test_dataset, 'files'):
+        file_paths = test_dataset.files
+    else:
+        file_paths = [None] * len(test_dataset)
     
     for i in range(len(test_dataset)):
         img_t, lbl, gt_path = test_dataset[i]
@@ -620,6 +631,54 @@ def evaluate(snn_encoder, test_dataset, normal_stats, device, timesteps,
         
         img_scores.append(img_score)
         img_labels.append(lbl)
+        
+        # ==================== LƯU ANOMALY MAP (phân theo thư mục con) ====================
+        if save_maps and maps_dir:
+            # Xác định tên thư mục con dựa trên đường dẫn ảnh
+            subfolder_name = "unknown"
+            if file_paths[i]:
+                path_parts = os.path.normpath(file_paths[i]).split(os.sep)
+                # Tìm 'test' (MVTec) hoặc 'bad' (VisA)
+                if 'test' in path_parts:
+                    test_idx = path_parts.index('test')
+                    if test_idx + 1 < len(path_parts):
+                        subfolder_name = path_parts[test_idx + 1]
+                elif 'bad' in path_parts:
+                    bad_idx = path_parts.index('bad')
+                    if bad_idx + 1 < len(path_parts):
+                        subfolder_name = path_parts[bad_idx + 1]
+                    else:
+                        subfolder_name = 'bad'
+                else:
+                    subfolder_name = 'good' if lbl == 0 else 'abnormal'
+            else:
+                subfolder_name = 'good' if lbl == 0 else 'abnormal'
+            
+            # Đường dẫn lưu: maps_dir/subfolder_name
+            save_dir = os.path.join(maps_dir, subfolder_name)
+            
+            # Đọc ảnh gốc (RGB)
+            if file_paths[i] and os.path.exists(file_paths[i]):
+                orig_img = cv2.imread(file_paths[i])
+                orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
+                orig_img = cv2.resize(orig_img, (img_size, img_size))
+            else:
+                mean = torch.tensor(IMAGENET_MEAN).view(3,1,1)
+                std = torch.tensor(IMAGENET_STD).view(3,1,1)
+                orig_img = img_t[0].cpu() * std + mean
+                orig_img = orig_img.clamp(0,1).permute(1,2,0).numpy()
+                orig_img = (orig_img * 255).astype(np.uint8)
+            
+            # Ground truth (nếu có)
+            gt_mask = None
+            if lbl == 1 and gt_path and os.path.exists(gt_path):
+                gt_mask = cv2.imread(gt_path, 0)
+                if gt_mask is not None:
+                    gt_mask = cv2.resize(gt_mask, (img_size, img_size))
+                    gt_mask = (gt_mask > 127).astype(np.uint8) * 255
+            
+            save_anomaly_map(orig_img, score_map, gt_mask, save_dir, i)
+        # =========================================================
         
         if lbl == 1 and gt_path:
             gt = cv2.imread(gt_path, 0)
@@ -706,7 +765,43 @@ def parse_args():
     parser.add_argument('--combine_method', type=str, default='simple',
                     choices=['simple', 'mad_weighted'],
                     help='Method to combine multi-layer deviations')
+    parser.add_argument('--save_anomaly_maps', action='store_true', help='Save anomaly map images for test samples')
+    parser.add_argument('--maps_root', type=str, default='./anomaly_maps', help='Root directory to save anomaly maps')
     return parser.parse_args()
+
+def save_anomaly_map(original_img, score_map, gt_mask, save_dir, idx):
+    """
+    original_img: numpy array (H,W,3) uint8 (RGB)
+    score_map: 2D numpy float (H,W)
+    gt_mask: 2D numpy uint8 (0/255) hoặc None
+    """
+    # Chuẩn bị ảnh gốc (PIL)
+    img_pil = Image.fromarray(original_img)
+    
+    # Chuẩn hóa anomaly map và tạo colormap jet
+    smin, smax = score_map.min(), score_map.max()
+    if smax > smin:
+        score_norm = (score_map - smin) / (smax - smin)
+    else:
+        score_norm = score_map
+    cmap = cm.jet(score_norm)
+    # Bỏ kênh alpha, chuyển về uint8
+    anomaly_colored = (cmap[:, :, :3] * 255).astype(np.uint8)
+    anomaly_pil = Image.fromarray(anomaly_colored)
+    
+    # 1. Lưu ảnh gốc
+    os.makedirs(save_dir, exist_ok=True)
+    img_pil.save(os.path.join(save_dir, f'{idx:04d}_img.png'))
+    
+    # 2. Lưu ảnh blend (chồng anomaly map lên ảnh gốc)
+    blended = Image.blend(img_pil, anomaly_pil, alpha=0.4)
+    blended.save(os.path.join(save_dir, f'{idx:04d}_blend.png'))
+    
+    # 3. Lưu ground truth (nếu có)
+    if gt_mask is not None:
+        # gt_mask đang là (H,W) uint8 (0/255), chuyển thành ảnh xám 3 kênh để lưu
+        gt_pil = Image.fromarray(gt_mask).convert('RGB')
+        gt_pil.save(os.path.join(save_dir, f'{idx:04d}_mask.png'))
 
 def seed_everything(seed=42):
     random.seed(seed)
@@ -845,9 +940,20 @@ def main():
             firing_rate_stats[T][name] = {'mean': mean_val, 'std': std_val}
         
         # Evaluate
+        if args.save_anomaly_maps:
+            # Tạo config_str: ví dụ "vgg16_mad_weightedlayer123"
+            config_str = f"{args.backbone}_{args.combine_method}{args.layers}"
+            snn_str = f"snnmode_{args.snn_mode}".replace('.', '_')
+            maps_dir = os.path.join(args.maps_root, config_str, snn_str, args.name, f"T{T}")
+        else:
+            maps_dir = None
+
         metrics, img_scores, img_labels = evaluate(
             snn_encoder, test_ds, normal_stats, device, T,
-            args.layers, args.img_size, args.use_membrane, args.combine_method
+            args.layers, args.img_size, args.use_membrane, args.combine_method,
+            save_maps=args.save_anomaly_maps,
+            maps_dir=maps_dir,
+            category_name=args.name
         )
         
         img_auc_val = metrics['img_auc'] if metrics['img_auc'] else 0.0
