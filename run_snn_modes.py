@@ -41,7 +41,7 @@ VISA_CATEGORIES = [
 COMMON_ARGS = {
     'img_size': 256,
     'batch_size': 16,
-    'calib_samples': 500,
+    'calib_samples': -1,
     'timesteps': [4, 8, 16, 32, 64],
     'backbone': 'vgg16',
     'layers': 'layer123',

@@ -325,6 +325,25 @@ def build_snn_encoder(ann_encoder, calib_loader, device, mode='max'):
         momentum=0.1
     )
     snn_encoder = converter(ann_encoder)
+    # ÉP BUỘC OUTPUT LÀ SPIKE
+    for module in snn_encoder.modules():
+        if hasattr(module, 'output'):
+            module.output = True
+        if hasattr(module, 'out_spike'):
+            module.out_spike = True
+
+    # Kiểm tra nhanh output có phải spike không
+    with torch.no_grad():
+        test_input = torch.randn(1, 3, 256, 256).to(device)
+        test_out = snn_encoder(test_input)
+        if isinstance(test_out, tuple):
+            test_out = test_out[0]
+        max_val = test_out.max().item()
+        print(f"  Spike test: max output = {max_val} (must be <= 1.0)")
+        if max_val > 1.0:
+            print("  WARNING: Still not spike! Upgrade spikingjelly or check configuration.")
+        else:
+            print("  SUCCESS: SNN outputs spikes (0/1).")
     print(f"  ANN2SNN conversion complete (mode={converter_mode})")
     return snn_encoder
 
@@ -345,17 +364,69 @@ def get_layer_indices_and_names(layers):
     }
     return mapping.get(layers, ([0, 1], ['layer2', 'layer3']))
 
-
+def _get_spike_features(snn_encoder, imgs, timesteps, layer_indices, layer_names, device):
+    """
+    Chạy SNN T timesteps, reconstruct spike từ membrane potential.
+    Returns dict {layer_name: firing_rate tensor (shape: [B, C, H, W])}.
+    """
+    imgs = imgs.to(device)
+    functional.reset_net(snn_encoder)
+    
+    spike_counts = {name: None for name in layer_names}
+    prev_outputs = None
+    
+    # Lấy ngưỡng v_threshold từ IFNode (giả sử tất cả các neuron có cùng ngưỡng)
+    v_th = 1.0
+    for module in snn_encoder.modules():
+        if hasattr(module, 'v_threshold'):
+            v_th = module.v_threshold
+            break
+    
+    with torch.no_grad():
+        for t in range(timesteps):
+            outputs = snn_encoder(imgs)  # outputs là tuple các membrane potential
+            
+            for idx, name in zip(layer_indices, layer_names):
+                feat = outputs[idx]  # (B, C, H, W)
+                
+                if prev_outputs is None:
+                    # Timestep đầu tiên: coi mọi giá trị > 0 là spike? Không an toàn.
+                    # Thực tế, bước đầu chưa có reset, dùng threshold trực tiếp hoặc bỏ qua.
+                    # Cách an toàn: bỏ qua timestep đầu (gán spike=0) và chỉ xét từ bước 2 trở đi.
+                    # Nhưng để đơn giản, ta dùng threshold từ giá trị tuyệt đối.
+                    # Tuy nhiên, do membrane có thể tích lũy dần, cách tốt là dùng delta > v_th/2.
+                    # Ở bước đầu, không có delta, nên spike tạm thời = 0.
+                    spike = torch.zeros_like(feat)
+                else:
+                    # Lấy chênh lệch với timestep trước
+                    delta = feat - prev_outputs[name]
+                    # Nếu delta vượt quá một nửa ngưỡng, coi như có spike
+                    spike = (delta > v_th * 0.5).float()
+                
+                if spike_counts[name] is None:
+                    spike_counts[name] = spike
+                else:
+                    spike_counts[name] += spike
+            
+            # Lưu outputs cho bước tiếp theo
+            prev_outputs = {}
+            for idx, name in zip(layer_indices, layer_names):
+                prev_outputs[name] = outputs[idx].clone()
+    
+    # Tính firing rate = tổng spike / T
+    rates = {}
+    for name in layer_names:
+        rates[name] = spike_counts[name] / timesteps
+    return rates
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 5 - Normal Statistics Computation
 # ═══════════════════════════════════════════════════════════════════════════
 
 def compute_normal_stats(snn_encoder, normal_loader, device, timesteps, layers='layer23'):
     snn_encoder.eval()
-    
     layer_indices, layer_names = get_layer_indices_and_names(layers)
     
-    # ---------- PASS 1: Tính mean và std ----------
+    # PASS 1: mean & std
     sum_rates = {name: None for name in layer_names}
     sum_sq_rates = {name: None for name in layer_names}
     count = 0
@@ -365,28 +436,20 @@ def compute_normal_stats(snn_encoder, normal_loader, device, timesteps, layers='
             imgs = imgs.to(device)
             B = imgs.shape[0]
             
-            functional.reset_net(snn_encoder)
-            spike_acc = {name: None for name in layer_names}
-            
-            for t in range(timesteps):
-                outputs = snn_encoder(imgs)
-                for idx, name in zip(layer_indices, layer_names):
-                    feat = outputs[idx]
-                    spike_acc[name] = feat if t == 0 else spike_acc[name] + feat
+            # Dùng hàm mới
+            rates = _get_spike_features(snn_encoder, imgs, timesteps, layer_indices, layer_names, device)
             
             for name in layer_names:
-                rate = spike_acc[name] / timesteps  # [B, C, H, W]
-                
+                rate = rates[name]  # (B, C, H, W)
                 if sum_rates[name] is None:
                     sum_rates[name] = rate.sum(dim=0).cpu()
                     sum_sq_rates[name] = (rate ** 2).sum(dim=0).cpu()
                 else:
                     sum_rates[name] += rate.sum(dim=0).cpu()
                     sum_sq_rates[name] += (rate ** 2).sum(dim=0).cpu()
-            
             count += B
     
-    # Lưu mean tạm thời
+    # Tính mean, std
     means = {}
     stats = {}
     for name in layer_names:
@@ -397,37 +460,24 @@ def compute_normal_stats(snn_encoder, normal_loader, device, timesteps, layers='
         means[name] = mean
         stats[name] = {'mean': mean, 'std': std}
     
-    # ---------- PASS 2: Tính MAD (mean absolute deviation) ----------
+    # PASS 2: MAD
     sum_abs_dev = {name: 0.0 for name in layer_names}
     count = 0
-    
     with torch.no_grad():
         for imgs, _, _ in normal_loader:
             imgs = imgs.to(device)
             B = imgs.shape[0]
-            
-            functional.reset_net(snn_encoder)
-            spike_acc = {name: None for name in layer_names}
-            
-            for t in range(timesteps):
-                outputs = snn_encoder(imgs)
-                for idx, name in zip(layer_indices, layer_names):
-                    feat = outputs[idx]
-                    spike_acc[name] = feat if t == 0 else spike_acc[name] + feat
-            
+            rates = _get_spike_features(snn_encoder, imgs, timesteps, layer_indices, layer_names, device)
             for name in layer_names:
-                rate = spike_acc[name] / timesteps
-                # |rate - mean|, sau đó lấy trung bình trên toàn bộ batch và không gian
+                rate = rates[name]
                 abs_dev = torch.abs(rate - means[name].to(device)).mean().item()
                 sum_abs_dev[name] += abs_dev * B
-            
             count += B
     
     for name in layer_names:
         mad = sum_abs_dev[name] / count
         stats[name]['mad'] = mad
-        print(f'    {name}: mean={stats[name]["mean"].mean().item():.4f}, '
-              f'std={stats[name]["std"].mean().item():.4f}, mad={mad:.6f}')
+        print(f'    {name}: mean={stats[name]["mean"].mean().item():.4f}, max={stats[name]["mean"].max().item():.4f}, std={stats[name]["std"].mean().item():.4f}, mad={mad:.6f}')
     
     return stats
 
@@ -438,21 +488,8 @@ def compute_normal_stats(snn_encoder, normal_loader, device, timesteps, layers='
 
 def get_firing_rates(snn_encoder, img_tensor, device, timesteps, layers='layer23'):
     functional.reset_net(snn_encoder)
-    
     layer_indices, layer_names = get_layer_indices_and_names(layers)
-    spike_acc = {name: None for name in layer_names}
-    
-    with torch.no_grad():
-        for t in range(timesteps):
-            outputs = snn_encoder(img_tensor)
-            for idx, name in zip(layer_indices, layer_names):
-                feat = outputs[idx]
-                spike_acc[name] = feat if t == 0 else spike_acc[name] + feat
-    
-    rates = {}
-    for name in layer_names:
-        rates[name] = spike_acc[name] / timesteps
-    
+    rates = _get_spike_features(snn_encoder, img_tensor, timesteps, layer_indices, layer_names, device)
     return rates
 
 
@@ -813,6 +850,25 @@ def seed_everything(seed=42):
     torch.backends.cudnn.benchmark = False
     os.environ['PYTHONHASHSEED'] = str(seed)
 
+def debug_snn(snn_encoder, normal_loader, device, timestep, layers='layer23'):
+    print("\n[DEBUG] SNN thresholds (v_threshold of IF nodes):")
+    found = False
+    for name, module in snn_encoder.named_modules():
+        if hasattr(module, 'v_threshold'):
+            print(f"  {name}: v_threshold = {module.v_threshold:.6f}")
+            found = True
+    if not found:
+        print("  WARNING: No v_threshold found.")
+    
+    print(f"\n[DEBUG] Reconstructed spike firing rate on a normal batch (T={timestep}):")
+    sample_imgs, _, _ = next(iter(normal_loader))
+    sample_imgs = sample_imgs.to(device)
+    layer_indices, layer_names = get_layer_indices_and_names(layers)
+    rates = _get_spike_features(snn_encoder, sample_imgs, timestep, layer_indices, layer_names, device)
+    for name in layer_names:
+        rate = rates[name]
+        print(f"  Layer {name}: mean={rate.mean().item():.6f}, max={rate.max().item():.6f}, std={rate.std().item():.6f}")
+
 def main():
     seed_everything(42)
     g = torch.Generator()
@@ -912,6 +968,12 @@ def main():
     print('\n[3/4] Converting ANN to SNN...')
     snn_encoder = build_snn_encoder(ann_encoder, calib_loader, device, mode=args.snn_mode)
     snn_encoder.eval()
+
+    # # ========== DEBUG ==========
+    # if args.timesteps:
+    #     debug_snn(snn_encoder, normal_loader, device, args.timesteps[2], args.layers)
+    # # ===========================
+    # ================================
     
     # Load test dataset
     test_ds = dataset_class(data_root, args.name, 'test', img_size=args.img_size)
