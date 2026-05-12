@@ -366,54 +366,43 @@ def get_layer_indices_and_names(layers):
 
 def _get_spike_features(snn_encoder, imgs, timesteps, layer_indices, layer_names, device):
     """
-    Chạy SNN T timesteps, reconstruct spike từ membrane potential.
-    Returns dict {layer_name: firing_rate tensor (shape: [B, C, H, W])}.
+    Extract true spike firing rate from cumulative membrane potential.
+    For SpikingJelly 0.0.0.0.14 where ann2snn outputs cumulative membrane.
     """
     imgs = imgs.to(device)
     functional.reset_net(snn_encoder)
     
-    spike_counts = {name: None for name in layer_names}
-    prev_outputs = None
-    
-    # Lấy ngưỡng v_threshold từ IFNode (giả sử tất cả các neuron có cùng ngưỡng)
+    # Lấy ngưỡng v_threshold (mặc định 1.0)
     v_th = 1.0
     for module in snn_encoder.modules():
         if hasattr(module, 'v_threshold'):
-            v_th = module.v_threshold
+            v_th = float(module.v_threshold)
             break
+    
+    spike_counts = {}
+    prev_cumulative = {}  # lưu cumulative của timestep trước
     
     with torch.no_grad():
         for t in range(timesteps):
-            outputs = snn_encoder(imgs)  # outputs là tuple các membrane potential
+            outputs = snn_encoder(imgs)  # tuple các cumulative membrane tensors
             
             for idx, name in zip(layer_indices, layer_names):
-                feat = outputs[idx]  # (B, C, H, W)
+                cumulative = outputs[idx]  # shape (B, C, H, W)
                 
-                if prev_outputs is None:
-                    # Timestep đầu tiên: coi mọi giá trị > 0 là spike? Không an toàn.
-                    # Thực tế, bước đầu chưa có reset, dùng threshold trực tiếp hoặc bỏ qua.
-                    # Cách an toàn: bỏ qua timestep đầu (gán spike=0) và chỉ xét từ bước 2 trở đi.
-                    # Nhưng để đơn giản, ta dùng threshold từ giá trị tuyệt đối.
-                    # Tuy nhiên, do membrane có thể tích lũy dần, cách tốt là dùng delta > v_th/2.
-                    # Ở bước đầu, không có delta, nên spike tạm thời = 0.
-                    spike = torch.zeros_like(feat)
+                if t == 0:
+                    # Timestep đầu: số spike = floor(cumulative / v_th), tối đa 1
+                    n_fires = torch.floor(cumulative.clamp(min=0) / v_th).clamp(max=1)
+                    spike_counts[name] = n_fires.float()
                 else:
-                    # Lấy chênh lệch với timestep trước
-                    delta = feat - prev_outputs[name]
-                    # Nếu delta vượt quá một nửa ngưỡng, coi như có spike
-                    spike = (delta > v_th * 0.5).float()
+                    # Timestep sau: tính delta so với bước trước
+                    delta = cumulative - prev_cumulative[name]
+                    n_fires = torch.floor(delta.clamp(min=0) / v_th).clamp(max=1)
+                    spike_counts[name] += n_fires.float()
                 
-                if spike_counts[name] is None:
-                    spike_counts[name] = spike
-                else:
-                    spike_counts[name] += spike
-            
-            # Lưu outputs cho bước tiếp theo
-            prev_outputs = {}
-            for idx, name in zip(layer_indices, layer_names):
-                prev_outputs[name] = outputs[idx].clone()
+                # Lưu cumulative hiện tại cho bước tiếp theo
+                prev_cumulative[name] = cumulative.clone()
     
-    # Tính firing rate = tổng spike / T
+    # Tính firing rate trung bình
     rates = {}
     for name in layer_names:
         rates[name] = spike_counts[name] / timesteps
@@ -967,6 +956,19 @@ def main():
     # ANN2SNN conversion - dùng calib_loader
     print('\n[3/4] Converting ANN to SNN...')
     snn_encoder = build_snn_encoder(ann_encoder, calib_loader, device, mode=args.snn_mode)
+    functional.set_step_mode(snn_encoder, step_mode='m')
+    # Debug unique values in SNN output (chỉ chạy một lần cho một batch nhỏ)
+    with torch.no_grad():
+        sample_imgs, _, _ = next(iter(normal_loader))
+        sample_imgs = sample_imgs.to(device)
+        functional.reset_net(snn_encoder)
+        out1 = snn_encoder(sample_imgs)
+        out2 = snn_encoder(sample_imgs)
+        for idx, name in zip(layer_indices, layer_names):
+            v1 = out1[idx]
+            v2 = out2[idx]
+            print(f"{name} step1 unique values: {v1.unique()[:10]}")
+            print(f"{name} step2 unique values: {v2.unique()[:10]}")
     snn_encoder.eval()
 
     # # ========== DEBUG ==========
