@@ -37,7 +37,7 @@ from matplotlib.colors import Normalize
 from PIL import Image
 import matplotlib.cm as cm
 import setproctitle
-setproctitle.setproctitle("Minh Tri is training...") 
+setproctitle.setproctitle("python") 
 
 try:
     import wandb
@@ -334,7 +334,8 @@ def build_snn_encoder(ann_encoder, calib_loader, device, mode='max'):
 
     # Kiểm tra nhanh output có phải spike không
     with torch.no_grad():
-        test_input = torch.randn(1, 3, 256, 256).to(device)
+        test_input, _, _ = next(iter(calib_loader))  # cần pass calib_loader vào
+        test_input = test_input[:1].to(device)
         test_out = snn_encoder(test_input)
         if isinstance(test_out, tuple):
             test_out = test_out[0]
@@ -415,27 +416,39 @@ def compute_normal_stats(snn_encoder, normal_loader, device, timesteps, layers='
     snn_encoder.eval()
     layer_indices, layer_names = get_layer_indices_and_names(layers)
     
-    # PASS 1: mean & std
+    # PASS 1: mean, std, và max
     sum_rates = {name: None for name in layer_names}
     sum_sq_rates = {name: None for name in layer_names}
+    max_rates = {name: 0.0 for name in layer_names}
     count = 0
     
     with torch.no_grad():
         for imgs, _, _ in normal_loader:
             imgs = imgs.to(device)
             B = imgs.shape[0]
-            
-            # Dùng hàm mới
-            rates = _get_spike_features(snn_encoder, imgs, timesteps, layer_indices, layer_names, device)
-            
+            functional.reset_net(snn_encoder)
+            spike_acc = {name: None for name in layer_names}
+            for t in range(timesteps):
+                outputs = snn_encoder(imgs)
+                for idx, name in zip(layer_indices, layer_names):
+                    feat = outputs[idx]
+                    spike = (feat > 0).float()
+                    if spike_acc[name] is None:
+                        spike_acc[name] = spike
+                    else:
+                        spike_acc[name] += spike
             for name in layer_names:
-                rate = rates[name]  # (B, C, H, W)
+                rate = spike_acc[name] / timesteps
                 if sum_rates[name] is None:
                     sum_rates[name] = rate.sum(dim=0).cpu()
                     sum_sq_rates[name] = (rate ** 2).sum(dim=0).cpu()
                 else:
                     sum_rates[name] += rate.sum(dim=0).cpu()
                     sum_sq_rates[name] += (rate ** 2).sum(dim=0).cpu()
+                # Cập nhật giá trị lớn nhất của rate (trên toàn bộ batch)
+                current_max = rate.max().item()
+                if current_max > max_rates[name]:
+                    max_rates[name] = current_max
             count += B
     
     # Tính mean, std
@@ -447,18 +460,32 @@ def compute_normal_stats(snn_encoder, normal_loader, device, timesteps, layers='
         var = torch.clamp(var, min=0.0)
         std = torch.sqrt(var + 1e-8)
         means[name] = mean
-        stats[name] = {'mean': mean, 'std': std}
+        stats[name] = {
+            'mean': mean,
+            'std': std,
+            'max_rate': max_rates[name]
+        }
     
-    # PASS 2: MAD
+    # PASS 2: MAD (giữ nguyên)
     sum_abs_dev = {name: 0.0 for name in layer_names}
     count = 0
     with torch.no_grad():
         for imgs, _, _ in normal_loader:
             imgs = imgs.to(device)
             B = imgs.shape[0]
-            rates = _get_spike_features(snn_encoder, imgs, timesteps, layer_indices, layer_names, device)
+            functional.reset_net(snn_encoder)
+            spike_acc = {name: None for name in layer_names}
+            for t in range(timesteps):
+                outputs = snn_encoder(imgs)
+                for idx, name in zip(layer_indices, layer_names):
+                    feat = outputs[idx]
+                    spike = (feat > 0).float()
+                    if spike_acc[name] is None:
+                        spike_acc[name] = spike
+                    else:
+                        spike_acc[name] += spike
             for name in layer_names:
-                rate = rates[name]
+                rate = spike_acc[name] / timesteps
                 abs_dev = torch.abs(rate - means[name].to(device)).mean().item()
                 sum_abs_dev[name] += abs_dev * B
             count += B
@@ -466,7 +493,9 @@ def compute_normal_stats(snn_encoder, normal_loader, device, timesteps, layers='
     for name in layer_names:
         mad = sum_abs_dev[name] / count
         stats[name]['mad'] = mad
-        print(f'    {name}: mean={stats[name]["mean"].mean().item():.4f}, max={stats[name]["mean"].max().item():.4f}, std={stats[name]["std"].mean().item():.4f}, mad={mad:.6f}')
+        print(f'    {name}: mean={stats[name]["mean"].mean().item():.4f}, '
+              f'max_rate={stats[name]["max_rate"]:.4f}, '
+              f'std={stats[name]["std"].mean().item():.4f}, mad={mad:.6f}')
     
     return stats
 
@@ -478,7 +507,20 @@ def compute_normal_stats(snn_encoder, normal_loader, device, timesteps, layers='
 def get_firing_rates(snn_encoder, img_tensor, device, timesteps, layers='layer23'):
     functional.reset_net(snn_encoder)
     layer_indices, layer_names = get_layer_indices_and_names(layers)
-    rates = _get_spike_features(snn_encoder, img_tensor, timesteps, layer_indices, layer_names, device)
+    spike_acc = {name: None for name in layer_names}
+    with torch.no_grad():
+        for t in range(timesteps):
+            outputs = snn_encoder(img_tensor)
+            for idx, name in zip(layer_indices, layer_names):
+                feat = outputs[idx]
+                spike = (feat > 0).float()   # spike thực
+                if spike_acc[name] is None:
+                    spike_acc[name] = spike
+                else:
+                    spike_acc[name] += spike
+    rates = {}
+    for name in layer_names:
+        rates[name] = spike_acc[name] / timesteps
     return rates
 
 
@@ -956,7 +998,6 @@ def main():
     # ANN2SNN conversion - dùng calib_loader
     print('\n[3/4] Converting ANN to SNN...')
     snn_encoder = build_snn_encoder(ann_encoder, calib_loader, device, mode=args.snn_mode)
-    functional.set_step_mode(snn_encoder, step_mode='m')
     # Debug unique values in SNN output (chỉ chạy một lần cho một batch nhỏ)
     with torch.no_grad():
         sample_imgs, _, _ = next(iter(normal_loader))
@@ -1001,7 +1042,8 @@ def main():
         for name, stats in normal_stats.items():
             mean_val = stats['mean'].mean().item()
             std_val = stats['std'].mean().item()
-            firing_rate_stats[T][name] = {'mean': mean_val, 'std': std_val}
+            max_val = stats['max_rate']
+            firing_rate_stats[T][name] = {'mean': mean_val, 'std': std_val, 'max': max_val}
         
         # Evaluate
         if args.save_anomaly_maps:
@@ -1119,7 +1161,7 @@ def main():
         for T in sorted(firing_rate_stats.keys()):
             f.write(f"\nTimestep T={T}:\n")
             for layer_name, stats in firing_rate_stats[T].items():
-                f.write(f"  {layer_name}: mean={stats['mean']:.6f}, std={stats['std']:.6f}\n")
+                f.write(f"  {layer_name}: mean={stats['mean']:.6f}, max={stats['max']:.6f}, std={stats['std']:.6f}\n")
     print(f'\nResults saved: {out_path}')
 
 

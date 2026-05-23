@@ -43,7 +43,7 @@ COMMON_ARGS = {
     'batch_size': 16,
     'calib_samples': -1,
     'timesteps': [4, 8, 16, 32, 64],
-    'backbone': 'vgg16',
+    'backbone': 'wide_resnet101_2',
     'layers': 'layer123',
     'combine_method': 'mad_weighted',
     'use_membrane': False,
